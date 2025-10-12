@@ -1,8 +1,8 @@
 # ESP32 Water Meter Project - Work Status
 
-**Last Updated**: 2025-10-08
-**Current Branch**: feature/water-meter-mtu
-**Main Branch**: main
+**Last Updated**: 2025-10-12
+**Current Branch**: master
+**Main Branch**: master
 **GitHub**: https://github.com/istorrs/ESP32-water-meter
 
 ## ✅ Project Complete - Both Apps Implemented
@@ -32,10 +32,9 @@ src/
 │   ├── mod.rs
 │   ├── config.rs
 │   ├── error.rs
-│   ├── gpio_mtu.rs
-│   ├── gpio_mtu_timer.rs
-│   ├── gpio_mtu_timer_v2.rs  # Active implementation
+│   ├── gpio_mtu_timer_v2.rs  # ISR->Task timer implementation
 │   └── uart_framing.rs
+├── uart_format.rs            # UART format support (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
 └── meter/                    # Meter (simulator) implementation
     ├── mod.rs
     ├── config.rs             # Meter types (Sensus/Neptune)
@@ -51,13 +50,13 @@ Makefile                      # Build targets for both apps
 - **UART0 CLI**: GPIO1 (TX), GPIO3 (RX) - 115200 baud
 - **Clock**: GPIO4 (output) - Generates 1200 baud clock
 - **Data**: GPIO5 (input) - Reads meter response
-- **Protocol**: 7E1 UART framing
+- **Protocol**: Configurable UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2), default 7E1
 
 ### Meter App (src/bin/meter_app.rs)
 - **UART0 CLI**: GPIO1 (TX), GPIO3 (RX) - 115200 baud
 - **Clock**: GPIO4 (input with interrupt) - Detects MTU clock
 - **Data**: GPIO5 (output, idle HIGH) - Sends response
-- **Protocol**: 7E1 (Sensus) or 7E2 (Neptune)
+- **Protocol**: Configurable UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2), default 7E1
 
 ### Testing Configuration
 Connect two ESP32 devices:
@@ -81,9 +80,10 @@ MTU GND              ──── Meter GND
 - Separate `meter_app` binary
 - GPIO interrupt on clock pin (rising edge)
 - ISR → Notification pattern (minimal ISR work)
-- Pre-computed UART frame generation
+- Pre-computed UART frame generation (6 formats supported)
 - Wake-up threshold (10 pulses before transmission)
 - Configurable meter types (Sensus 7E1, Neptune 7E2)
+- Configurable UART formats (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
 - Customizable response messages via CLI
 - Statistics tracking (pulses, bits, messages)
 
@@ -132,6 +132,7 @@ cargo run --bin meter_app --release
 - `mtu_stop` - Stop MTU operation
 - `mtu_status` - Show MTU status and statistics
 - `mtu_baud <rate>` - Set MTU baud rate (1-115200, default 1200)
+- `mtu_format <fmt>` - Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
 - `mtu_reset` - Reset MTU statistics
 
 ### Meter App Commands
@@ -144,6 +145,7 @@ cargo run --bin meter_app --release
 - `enable` - Enable meter response to clock signals
 - `disable` - Disable meter response
 - `type <sensus|neptune>` - Set meter type (7E1 or 7E2)
+- `format <fmt>` - Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
 - `message <text>` - Set response message (`\r` added automatically)
 
 ## 🧪 Testing Workflow

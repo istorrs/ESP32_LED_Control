@@ -25,6 +25,7 @@ Each meter reading published to `istorrs/mtu/data` includes device identificatio
   "wifi_ip": "192.168.1.119",
   "message": "V;RB00000200;IB61564400;A1000;Z3214;XT0746;MT0683;RR00000000;GX000000;GN000000",
   "baud_rate": 1200,
+  "uart_format": "7E1",
   "cycles": 15,
   "successful": 2,
   "corrupted": 0,
@@ -39,7 +40,8 @@ Each meter reading published to `istorrs/mtu/data` includes device identificatio
 
 **Meter Data Fields**:
 - `message` - Raw meter response string
-- `baud_rate` - Current MTU baud rate setting
+- `baud_rate` - Current MTU baud rate setting (1-115200 bps)
+- `uart_format` - Current UART frame format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
 - `cycles` - Total clock cycles sent
 - `successful` - Number of successful reads
 - `corrupted` - Number of corrupted reads (frame errors)
@@ -75,6 +77,37 @@ mosquitto_pub -h test.mosquitto.org -t "istorrs/mtu/24:0a:c4:12:34:56/control" \
 - Use **retain** (`-r`) so the configuration persists and is delivered to ESP32 on every connect
 - Baud rate can only be changed when MTU is stopped
 - Device-specific topics prevent accidentally changing all devices
+
+#### Set UART Format
+
+Configure the MTU UART frame format (persists across ESP32 reconnects when using `retain`).
+
+**Broadcast to all devices**:
+```bash
+mosquitto_pub -h test.mosquitto.org -t "istorrs/mtu/control" \
+  -m '{"uart_format":"7E1"}' -q 1 -r
+```
+
+**Send to specific device** (recommended for multi-device setups):
+```bash
+# Replace chip_id with your device's chip_id
+mosquitto_pub -h test.mosquitto.org -t "istorrs/mtu/24:0a:c4:12:34:56/control" \
+  -m '{"uart_format":"8N1"}' -q 1 -r
+```
+
+**Supported UART formats**:
+- `7E1` - 7 data bits, even parity, 1 stop bit (Sensus meters - default)
+- `7E2` - 7 data bits, even parity, 2 stop bits (Neptune meters)
+- `8N1` - 8 data bits, no parity, 1 stop bit (generic)
+- `8E1` - 8 data bits, even parity, 1 stop bit
+- `7O1` - 7 data bits, odd parity, 1 stop bit
+- `8N2` - 8 data bits, no parity, 2 stop bits
+
+**Important**:
+- Use **QoS 1** (`-q 1`) for reliable delivery
+- Use **retain** (`-r`) so the configuration persists
+- UART format can only be changed when MTU is stopped
+- Must match your water meter's UART configuration
 
 #### Start MTU with Duration
 

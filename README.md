@@ -23,17 +23,18 @@ Both apps feature interactive serial CLI control over UART0 (115200 baud, USB-C 
 - Automatic idle line synchronization for reliable message capture
 - Early exit on complete message reception
 - Message validation with parity checking and statistics
+- **Configurable UART formats**: Support for 7E1, 7E2, 8N1, 8E1, 7O1, 8N2
 - **On-demand WiFi/MQTT**: Connects only when publishing data (50-76% power savings)
 - **Per-device MQTT control**: Device-specific and broadcast control topics
-- **Remote configuration**: Change baud rate, trigger reads via MQTT
+- **Remote configuration**: Change baud rate, UART format, trigger reads via MQTT
 - **Device identification**: Unique chip_id, WiFi MAC, and IP in every message
 
 ### Meter App Features
 - GPIO interrupt-based clock detection (rising edge)
-- Pre-computed UART frame generation (7E1/7E2)
+- **Configurable UART formats**: Pre-computed frame generation for 7E1, 7E2, 8N1, 8E1, 7O1, 8N2
 - Wake-up threshold (10 pulses) before transmission
 - Configurable meter types (Sensus 7E1, Neptune 7E2)
-- Customizable response messages via CLI
+- Customizable response messages and UART format via CLI
 
 ## Hardware
 
@@ -290,6 +291,10 @@ Send commands and configuration via MQTT (while ESP32 is listening):
 # Set baud rate (persists across reconnects with retain flag)
 mosquitto_pub -h test.mosquitto.org -t "istorrs/mtu/control" \
   -m '{"baud_rate":1200}' -q 1 -r
+
+# Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
+mosquitto_pub -h test.mosquitto.org -t "istorrs/mtu/control" \
+  -m '{"uart_format":"7E1"}' -q 1 -r
 
 # Trigger MTU read remotely
 mosquitto_pub -h test.mosquitto.org -t "istorrs/mtu/control" \
