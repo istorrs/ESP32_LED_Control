@@ -42,6 +42,17 @@ impl MeterHandler {
         log::info!("Meter: Response message updated");
     }
 
+    pub fn get_uart_format(&self) -> crate::uart_format::UartFormat {
+        let config = self.config.lock().unwrap();
+        config.uart_format
+    }
+
+    pub fn set_uart_format(&self, format: crate::uart_format::UartFormat) {
+        let mut config = self.config.lock().unwrap();
+        config.uart_format = format;
+        log::info!("Meter: UART format set to {}", format.as_str());
+    }
+
     pub fn enable(&self) {
         let mut config = self.config.lock().unwrap();
         config.enabled = true;
@@ -59,39 +70,17 @@ impl MeterHandler {
         config.enabled
     }
 
-    /// Build UART frame with proper framing for meter type
-    fn build_uart_frame(&self, byte: u8, meter_type: &MeterType) -> heapless::Vec<u8, 12> {
-        let mut frame = heapless::Vec::new();
+    /// Build UART frame with proper framing using configured UART format
+    fn build_uart_frame(&self, byte: u8, uart_format: crate::uart_format::UartFormat) -> heapless::Vec<u8, 12> {
+        // Use the uart_format module's encode function
+        let bits = crate::uart_format::encode_uart_frame(byte, uart_format);
 
-        // Start bit
-        let _ = frame.push(0);
-
-        // Data bits (LSB first) - only 7 bits for 7E1/7E2 framing
-        let data_7bit = byte & 0x7F; // Mask to 7 bits
-        for i in 0..7 {
-            let bit = (data_7bit >> i) & 1;
-            let _ = frame.push(bit);
+        // Convert std::vec::Vec to heapless::Vec
+        let mut heapless_bits: heapless::Vec<u8, 12> = heapless::Vec::new();
+        for &bit in &bits {
+            let _ = heapless_bits.push(bit);
         }
-
-        // Parity and stop bits based on meter type
-        match meter_type {
-            MeterType::Sensus => {
-                // 7E1: 7 data bits + even parity + 1 stop bit
-                // Calculate even parity for the 7 data bits
-                let parity = (data_7bit.count_ones() % 2) as u8;
-                let _ = frame.push(parity);
-                let _ = frame.push(1); // stop bit
-            }
-            MeterType::Neptune => {
-                // 7E2: 7 data bits + even parity + 2 stop bits
-                let parity = (data_7bit.count_ones() % 2) as u8;
-                let _ = frame.push(parity);
-                let _ = frame.push(1); // stop bit 1
-                let _ = frame.push(1); // stop bit 2
-            }
-        }
-
-        frame
+        heapless_bits
     }
 
     /// Build complete response frame buffer for all characters in the message
@@ -101,13 +90,14 @@ impl MeterHandler {
 
         // Build frames for each character in the response message
         for (char_index, ch) in config.response_message.chars().enumerate() {
-            let char_frame = self.build_uart_frame(ch as u8, &config.meter_type);
+            let char_frame = self.build_uart_frame(ch as u8, config.uart_format);
             log::info!(
-                "Meter: Building frame for char #{}: '{}' (ASCII {}) -> {} bits",
+                "Meter: Building frame for char #{}: '{}' (ASCII {}) -> {} bits [{}]",
                 char_index + 1,
                 ch,
                 ch as u8,
-                char_frame.len()
+                char_frame.len(),
+                config.uart_format.as_str()
             );
             for &bit in &char_frame {
                 let _ = frame_buffer.push(bit);
@@ -115,9 +105,10 @@ impl MeterHandler {
         }
 
         log::info!(
-            "Meter: Complete frame buffer: {} total bits for {} characters",
+            "Meter: Complete frame buffer: {} total bits for {} characters (format: {})",
             frame_buffer.len(),
-            config.response_message.len()
+            config.response_message.len(),
+            config.uart_format.as_str()
         );
         frame_buffer
     }

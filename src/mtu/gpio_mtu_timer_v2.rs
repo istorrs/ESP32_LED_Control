@@ -19,6 +19,8 @@ pub enum MtuCommand {
     Stop,
     /// Set MTU baud rate (must be stopped to change)
     SetBaudRate { baud_rate: u32 },
+    /// Set UART frame format (must be stopped to change)
+    SetUartFormat { format: crate::uart_format::UartFormat },
 }
 
 /// MTU implementation using hardware timer ISR -> Task pattern
@@ -54,6 +56,16 @@ impl GpioMtuTimerV2 {
     pub fn set_baud_rate(&self, baud_rate: u32) {
         let mut config = self.config.lock().unwrap();
         config.baud_rate = baud_rate;
+    }
+
+    pub fn get_uart_format(&self) -> crate::uart_format::UartFormat {
+        let config = self.config.lock().unwrap();
+        config.uart_format
+    }
+
+    pub fn set_uart_format(&self, format: crate::uart_format::UartFormat) {
+        let mut config = self.config.lock().unwrap();
+        config.uart_format = format;
     }
 
     pub fn get_stats(&self) -> (u32, u32, usize) {
@@ -180,6 +192,15 @@ impl GpioMtuTimerV2 {
                                     "MTU: Invalid baud rate {} (must be 1-115200)",
                                     baud_rate
                                 );
+                            }
+                        }
+                        Ok(MtuCommand::SetUartFormat { format }) => {
+                            if mtu.is_running() {
+                                log::warn!("MTU: Cannot change UART format while MTU is running");
+                            } else {
+                                log::info!("MTU: Setting UART format to {}", format.as_str());
+                                mtu.set_uart_format(format);
+                                log::info!("MTU: UART format updated to {}", format.as_str());
                             }
                         }
                         Err(_) => {
@@ -554,7 +575,7 @@ impl GpioMtuTimerV2 {
             }
 
             // Collect complete frame - like ESP32C lines 538-565
-            let frame_size = config.framing.bits_per_frame();
+            let frame_size = config.uart_format.total_bits() as usize;
             let mut frame_bits = heapless::Vec::<u8, 16>::new();
             let _ = frame_bits.push(0); // Start bit
 
@@ -583,20 +604,31 @@ impl GpioMtuTimerV2 {
             }
 
             // Process the complete frame - like ESP32C lines 576-620
-            match UartFrame::new(frame_bits.clone(), config.framing) {
+            match UartFrame::new(frame_bits.clone(), config.uart_format) {
                 Ok(frame) => {
                     match extract_char_from_frame(&frame) {
-                        Ok(ch) => {
+                        Ok((ch, parity_ok)) => {
                             frames_decoded += 1;
                             let _ = received_chars.push(ch);
 
-                            log::info!(
-                                "UART: Frame {} -> char: {:?} (ASCII {}), message length: {}",
-                                frames_decoded,
-                                ch,
-                                ch as u8,
-                                received_chars.len()
-                            );
+                            // Track parity errors as frame errors
+                            if !parity_ok {
+                                frame_errors += 1;
+                                log::warn!(
+                                    "UART: Frame {} -> char: {:?} (ASCII {}), PARITY ERROR",
+                                    frames_decoded,
+                                    ch,
+                                    ch as u8
+                                );
+                            } else {
+                                log::info!(
+                                    "UART: Frame {} -> char: {:?} (ASCII {}), message length: {}",
+                                    frames_decoded,
+                                    ch,
+                                    ch as u8,
+                                    received_chars.len()
+                                );
+                            }
 
                             // Check for end of message (carriage return)
                             if ch == '\r' {

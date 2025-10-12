@@ -26,6 +26,7 @@ impl CommandParser {
             "mtu_stop",
             "mtu_status",
             "mtu_baud",
+            "mtu_format",
             "mtu_reset",
             "wifi_connect",
             "wifi_reconnect",
@@ -93,6 +94,21 @@ impl CommandParser {
                     }
                 } else {
                     CliCommand::Unknown("mtu_baud: baud rate required".to_string())
+                }
+            }
+            "mtu_format" => {
+                if let Some(format_str) = parts.next() {
+                    // Validate format string (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
+                    let format_upper = format_str.to_uppercase();
+                    if ["7E1", "7E2", "8N1", "8E1", "7O1", "8N2"].contains(&format_upper.as_str()) {
+                        CliCommand::MtuFormat(format_upper)
+                    } else {
+                        CliCommand::Unknown(
+                            "mtu_format: invalid format (valid: 7E1, 7E2, 8N1, 8E1, 7O1, 8N2)".to_string()
+                        )
+                    }
+                } else {
+                    CliCommand::Unknown("mtu_format: format required (e.g., 7E1, 7E2, 8N1)".to_string())
                 }
             }
             "echo" => {

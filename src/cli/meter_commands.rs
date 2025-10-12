@@ -60,6 +60,7 @@ impl MeterCommandHandler {
                         }
                     ));
                     response.push_str(&format!("  Type: {:?}\r\n", config.meter_type));
+                    response.push_str(&format!("  UART format: {}\r\n", config.uart_format.as_str()));
                     response.push_str("  Pins: GPIO4 (clock in), GPIO5 (data out)\r\n");
                     response.push_str(&format!(
                         "  Message: '{}' ({} chars)\r\n",
@@ -152,6 +153,19 @@ impl MeterCommandHandler {
                         ));
                     } else {
                         response.push_str("Error: Message too long (max 256 characters)");
+                    }
+                } else {
+                    response.push_str("Meter not configured");
+                }
+            }
+            MeterCommand::SetFormat(format_str) => {
+                log::info!("CLI: Meter UART format set to: {}", format_str);
+                if let Some(ref meter) = self.meter {
+                    if let Some(format) = crate::uart_format::UartFormat::from_str(&format_str) {
+                        meter.set_uart_format(format);
+                        response.push_str(&format!("Meter UART format set to: {}", format_str));
+                    } else {
+                        response.push_str("Invalid UART format");
                     }
                 } else {
                     response.push_str("Meter not configured");

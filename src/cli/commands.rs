@@ -165,6 +165,7 @@ impl CommandHandler {
                 log::info!("CLI: MTU status requested");
                 if let Some(ref mtu) = self.mtu {
                     let baud_rate = mtu.get_baud_rate();
+                    let uart_format = mtu.get_uart_format();
                     let (successful, corrupted, cycles) = mtu.get_stats();
                     let total_reads = successful + corrupted;
 
@@ -178,6 +179,7 @@ impl CommandHandler {
                         }
                     ));
                     response.push_str(&format!("  Baud rate: {} bps\r\n", baud_rate));
+                    response.push_str(&format!("  UART format: {}\r\n", uart_format.as_str()));
                     response.push_str("  Pins: GPIO4 (clock), GPIO5 (data)\r\n");
                     response.push_str(&format!("  Total cycles: {}\r\n", cycles));
                     response.push_str("  Statistics:\r\n");
@@ -207,6 +209,32 @@ impl CommandHandler {
                     } else {
                         mtu.set_baud_rate(baud_rate);
                         response.push_str(&format!("MTU baud rate set to {} bps", baud_rate));
+                    }
+                } else {
+                    response.push_str("MTU not configured");
+                }
+            }
+            CliCommand::MtuFormat(format_str) => {
+                log::info!("CLI: MTU UART format set to {}", format_str);
+                if let Some(ref sender) = self.mtu_cmd_sender {
+                    if let Some(ref mtu) = self.mtu {
+                        if mtu.is_running() {
+                            response.push_str("Cannot change UART format while MTU is running.\r\n");
+                            response.push_str("Use 'mtu_stop' first.");
+                        } else if let Some(format) = crate::uart_format::UartFormat::from_str(&format_str) {
+                            match sender.send(MtuCommand::SetUartFormat { format }) {
+                                Ok(_) => {
+                                    response.push_str(&format!("MTU UART format set to {}", format_str));
+                                }
+                                Err(_) => {
+                                    response.push_str("Error: Failed to send command to MTU thread");
+                                }
+                            }
+                        } else {
+                            response.push_str("Invalid UART format");
+                        }
+                    } else {
+                        response.push_str("MTU not configured");
                     }
                 } else {
                     response.push_str("MTU not configured");

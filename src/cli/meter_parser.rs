@@ -10,6 +10,7 @@ pub enum MeterCommand {
     Reset,
     SetType(MeterType),
     SetMessage(String),
+    SetFormat(String),  // Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
     Enable,
     Disable,
     Empty,
@@ -76,6 +77,22 @@ impl MeterCommandParser {
                     )
                 }
             }
+            "format" => {
+                if parts.len() >= 2 {
+                    let format_str = parts[1].to_uppercase();
+                    if ["7E1", "7E2", "8N1", "8E1", "7O1", "8N2"].contains(&format_str.as_str()) {
+                        MeterCommand::SetFormat(format_str)
+                    } else {
+                        MeterCommand::Unknown(
+                            "Invalid UART format. Valid formats: 7E1, 7E2, 8N1, 8E1, 7O1, 8N2".to_string()
+                        )
+                    }
+                } else {
+                    MeterCommand::Unknown(
+                        "Usage: format <7E1|7E2|8N1|8E1|7O1|8N2>".to_string()
+                    )
+                }
+            }
             _ => MeterCommand::Unknown(format!(
                 "Unknown command: '{}'. Type 'help' for available commands.",
                 parts[0]
@@ -85,8 +102,8 @@ impl MeterCommandParser {
 
     pub fn available_commands() -> &'static [&'static str] {
         &[
-            "help", "clear", "version", "status", "uptime", "reset", "type", "message", "enable",
-            "disable",
+            "help", "clear", "version", "status", "uptime", "reset", "type", "message", "format",
+            "enable", "disable",
         ]
     }
 }
