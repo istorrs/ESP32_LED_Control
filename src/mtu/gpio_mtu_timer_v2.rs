@@ -546,6 +546,8 @@ impl GpioMtuTimerV2 {
         let mut received_chars = heapless::Vec::<char, 256>::new();
         let mut frames_decoded = 0usize;
         let mut frame_errors = 0usize;
+        let mut consecutive_errors = 0usize;
+        const MAX_CONSECUTIVE_ERRORS: usize = 20; // Circuit breaker threshold
 
         while running.load(Ordering::Relaxed) && !message_complete.load(Ordering::Relaxed) {
             // Wait for start bit (0) - like ESP32C line 511
@@ -602,6 +604,21 @@ impl GpioMtuTimerV2 {
             if bits_received != frame_size {
                 // Incomplete frame
                 frame_errors += 1;
+                consecutive_errors += 1;
+
+                // Circuit breaker: Stop if too many consecutive errors
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    log::error!(
+                        "UART: Too many consecutive framing errors ({}) - possible format mismatch. Stopping.",
+                        consecutive_errors
+                    );
+                    log::error!(
+                        "UART: Expected format: {}, check meter is sending same format",
+                        config.uart_format.as_str()
+                    );
+                    running.store(false, Ordering::Relaxed);
+                    break;
+                }
                 continue;
             }
 
@@ -611,6 +628,7 @@ impl GpioMtuTimerV2 {
                     match extract_char_from_frame(&frame) {
                         Ok((ch, parity_ok)) => {
                             frames_decoded += 1;
+                            consecutive_errors = 0; // Reset on successful decode
                             let _ = received_chars.push(ch);
 
                             // Track parity errors as frame errors
@@ -656,21 +674,59 @@ impl GpioMtuTimerV2 {
                         }
                         Err(e) => {
                             frame_errors += 1;
-                            log::warn!(
-                                "UART: Frame validation error: {:?}, bits: {:?}",
-                                e,
-                                frame_bits.as_slice()
-                            );
+                            consecutive_errors += 1;
+
+                            // Rate-limited logging: only log first 5 errors or every 20th error
+                            if consecutive_errors <= 5 || consecutive_errors % 20 == 0 {
+                                log::warn!(
+                                    "UART: Frame validation error: {:?}, bits: {:?}",
+                                    e,
+                                    frame_bits.as_slice()
+                                );
+                            }
+
+                            // Circuit breaker: Stop if too many consecutive errors
+                            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                log::error!(
+                                    "UART: Too many consecutive framing errors ({}) - possible format mismatch. Stopping.",
+                                    consecutive_errors
+                                );
+                                log::error!(
+                                    "UART: Expected format: {}, check meter is sending same format",
+                                    config.uart_format.as_str()
+                                );
+                                running.store(false, Ordering::Relaxed);
+                                break;
+                            }
                         }
                     }
                 }
                 Err(e) => {
                     frame_errors += 1;
-                    log::warn!(
-                        "UART: Frame creation error: {:?}, {} bits received",
-                        e,
-                        frame_bits.len()
-                    );
+                    consecutive_errors += 1;
+
+                    // Rate-limited logging: only log first 5 errors or every 20th error
+                    if consecutive_errors <= 5 || consecutive_errors % 20 == 0 {
+                        log::warn!(
+                            "UART: Frame creation error: {:?}, {} bits received",
+                            e,
+                            frame_bits.len()
+                        );
+                    }
+
+                    // Circuit breaker: Stop if too many consecutive errors
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        log::error!(
+                            "UART: Too many consecutive framing errors ({}) - possible format mismatch. Stopping.",
+                            consecutive_errors
+                        );
+                        log::error!(
+                            "UART: Expected format: {}, check meter is sending same format",
+                            config.uart_format.as_str()
+                        );
+                        running.store(false, Ordering::Relaxed);
+                        break;
+                    }
                 }
             }
         }
@@ -678,6 +734,12 @@ impl GpioMtuTimerV2 {
         log::info!("UART: Framing task ending (pre-cleanup)");
         log::info!("  Frames decoded: {}", frames_decoded);
         log::info!("  Frame errors: {}", frame_errors);
+        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+            log::error!(
+                "  Stopped due to {} consecutive errors (format mismatch likely)",
+                consecutive_errors
+            );
+        }
 
         // Store frame error count for main task to check
         *frame_error_count.lock().unwrap() = frame_errors;
