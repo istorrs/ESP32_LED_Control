@@ -28,26 +28,6 @@ pub struct MtuConfig {
     pub corrupted_reads: u32,
 }
 
-// Keep old UartFraming enum for backwards compatibility, but mark as deprecated
-#[deprecated(since = "0.2.0", note = "Use UartFormat instead")]
-#[derive(Debug, Clone, Copy)]
-pub enum UartFraming {
-    /// 7 data bits, even parity, 1 stop bit (Sensus Standard)
-    SevenE1,
-    /// 7 data bits, even parity, 2 stop bits (Neptune)
-    SevenE2,
-}
-
-#[allow(deprecated)]
-impl UartFraming {
-    pub fn bits_per_frame(self) -> usize {
-        match self {
-            UartFraming::SevenE1 => 10, // 1 start + 7 data + 1 parity + 1 stop
-            UartFraming::SevenE2 => 11, // 1 start + 7 data + 1 parity + 2 stop
-        }
-    }
-}
-
 impl MtuConfig {
     /// Calculate bit duration in microseconds from baud rate
     pub fn bit_duration_micros(&self) -> u64 {
