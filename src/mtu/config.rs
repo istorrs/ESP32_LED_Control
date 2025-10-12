@@ -1,3 +1,4 @@
+use crate::uart_format::UartFormat;
 use heapless::String;
 
 #[derive(Debug, Clone)]
@@ -14,8 +15,8 @@ pub struct MtuConfig {
     /// Maximum runtime for MTU operation (seconds)
     pub runtime_secs: u64,
 
-    /// UART framing configuration
-    pub framing: UartFraming,
+    /// UART framing configuration (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
+    pub uart_format: UartFormat,
 
     /// Expected message for testing (default is meter's default response)
     pub expected_message: String<256>,
@@ -27,6 +28,8 @@ pub struct MtuConfig {
     pub corrupted_reads: u32,
 }
 
+// Keep old UartFraming enum for backwards compatibility, but mark as deprecated
+#[deprecated(since = "0.2.0", note = "Use UartFormat instead")]
 #[derive(Debug, Clone, Copy)]
 pub enum UartFraming {
     /// 7 data bits, even parity, 1 stop bit (Sensus Standard)
@@ -35,6 +38,7 @@ pub enum UartFraming {
     SevenE2,
 }
 
+#[allow(deprecated)]
 impl UartFraming {
     pub fn bits_per_frame(self) -> usize {
         match self {
@@ -69,7 +73,7 @@ impl Default for MtuConfig {
             power_up_delay_ms: 10, // Very short delay to be ready before meter starts
             bit_timeout_ms: 2000,
             runtime_secs: 30,
-            framing: UartFraming::SevenE1, // Sensus Standard default
+            uart_format: UartFormat::Format7E1, // Sensus Standard default (7E1)
             expected_message,
             successful_reads: 0,
             corrupted_reads: 0,

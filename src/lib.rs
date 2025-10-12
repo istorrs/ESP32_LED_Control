@@ -7,6 +7,7 @@ pub mod meter;
 pub mod mqtt;
 pub mod mtu;
 pub mod network_config;
+pub mod uart_format;
 pub mod wifi;
 
 pub use cli::{
@@ -19,4 +20,5 @@ pub use mtu::{
     GpioMtu, GpioMtuTimer, GpioMtuTimerV2, MtuCommand, MtuConfig, MtuError, MtuResult, UartFraming,
 };
 pub use network_config::{MqttConfig, MtuMqttTopics, WifiConfig};
+pub use uart_format::{Parity, UartFormat};
 pub use wifi::WifiManager;
