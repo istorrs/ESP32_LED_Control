@@ -244,6 +244,7 @@ impl<'d> Terminal<'d> {
         self.write_line("  mtu_stop    - Stop MTU operation")?;
         self.write_line("  mtu_status  - Show MTU status")?;
         self.write_line("  mtu_baud <rate> - Set MTU baud rate (1-115200, default 1200)")?;
+        self.write_line("  mtu_format <fmt> - Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)")?;
         self.write_line("  mtu_reset   - Reset MTU statistics")?;
         self.write_line("  wifi_connect [ssid] [password] - Connect to WiFi (no args = default)")?;
         self.write_line("  wifi_reconnect - Quick reconnect to default WiFi")?;
@@ -269,6 +270,7 @@ impl<'d> Terminal<'d> {
         self.write_line("  enable      - Enable meter response to clock signals")?;
         self.write_line("  disable     - Disable meter response")?;
         self.write_line("  type <sensus|neptune> - Set meter type (7E1 or 7E2)")?;
+        self.write_line("  format <fmt> - Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)")?;
         self.write_line("  message <text> - Set response message (\\r added automatically)")?;
         self.write_line("")?;
         self.write_line("Use TAB to autocomplete commands")?;

@@ -219,6 +219,7 @@ Available commands:
   mtu_stop         - Stop MTU operation
   mtu_status       - Show MTU status and statistics
   mtu_baud <rate>  - Set MTU baud rate (1-115200, default 1200)
+  mtu_format <fmt> - Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
   mtu_reset        - Reset MTU statistics
 
   wifi_connect [ssid] [password] - Connect to WiFi
@@ -243,6 +244,7 @@ Available commands:
   enable           - Enable meter response to clock signals
   disable          - Disable meter response
   type <sensus|neptune> - Set meter type (7E1 or 7E2)
+  format <fmt>     - Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
   message <text>   - Set response message (\r added automatically)
 ```
 
