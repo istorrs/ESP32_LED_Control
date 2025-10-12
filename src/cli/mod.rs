@@ -30,9 +30,9 @@ pub enum CliCommand {
     MtuStart(Option<u16>), // Optional duration in seconds
     MtuStop,
     MtuStatus,
-    MtuBaud(u32),          // Set MTU baud rate
-    MtuFormat(String),     // Set MTU UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
-    MtuReset,              // Reset MTU statistics
+    MtuBaud(u32),                                // Set MTU baud rate
+    MtuFormat(String), // Set MTU UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
+    MtuReset,          // Reset MTU statistics
     WifiConnect(Option<String>, Option<String>), // ssid, password (None = use default)
     WifiStatus,
     WifiReconnect,       // Reconnect using stored credentials

@@ -104,11 +104,14 @@ impl CommandParser {
                         CliCommand::MtuFormat(format_upper)
                     } else {
                         CliCommand::Unknown(
-                            "mtu_format: invalid format (valid: 7E1, 7E2, 8N1, 8E1, 7O1, 8N2)".to_string()
+                            "mtu_format: invalid format (valid: 7E1, 7E2, 8N1, 8E1, 7O1, 8N2)"
+                                .to_string(),
                         )
                     }
                 } else {
-                    CliCommand::Unknown("mtu_format: format required (e.g., 7E1, 7E2, 8N1)".to_string())
+                    CliCommand::Unknown(
+                        "mtu_format: format required (e.g., 7E1, 7E2, 8N1)".to_string(),
+                    )
                 }
             }
             "echo" => {

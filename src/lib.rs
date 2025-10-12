@@ -16,9 +16,7 @@ pub use cli::{
 };
 pub use meter::{MeterConfig, MeterHandler, MeterType};
 pub use mqtt::{MqttClient, MqttStatus};
-pub use mtu::{
-    GpioMtu, GpioMtuTimer, GpioMtuTimerV2, MtuCommand, MtuConfig, MtuError, MtuResult, UartFraming,
-};
+pub use mtu::{GpioMtu, GpioMtuTimer, GpioMtuTimerV2, MtuCommand, MtuConfig, MtuError, MtuResult};
 pub use network_config::{MqttConfig, MtuMqttTopics, WifiConfig};
 pub use uart_format::{Parity, UartFormat};
 pub use wifi::WifiManager;

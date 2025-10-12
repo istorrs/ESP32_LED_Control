@@ -20,7 +20,9 @@ pub enum MtuCommand {
     /// Set MTU baud rate (must be stopped to change)
     SetBaudRate { baud_rate: u32 },
     /// Set UART frame format (must be stopped to change)
-    SetUartFormat { format: crate::uart_format::UartFormat },
+    SetUartFormat {
+        format: crate::uart_format::UartFormat,
+    },
 }
 
 /// MTU implementation using hardware timer ISR -> Task pattern

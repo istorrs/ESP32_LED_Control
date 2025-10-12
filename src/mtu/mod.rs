@@ -6,7 +6,6 @@ pub mod gpio_mtu_timer_v2;
 pub mod uart_framing;
 
 pub use config::MtuConfig;
-pub use config::UartFraming;
 pub use error::{MtuError, MtuResult};
 pub use gpio_mtu::GpioMtu;
 pub use gpio_mtu_timer::GpioMtuTimer;

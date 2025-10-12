@@ -8,9 +8,10 @@
 /// - 7O1: 7 data bits, odd parity, 1 stop bit
 /// - 8N2: 8 data bits, no parity, 2 stop bits
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UartFormat {
     /// 7 data bits, even parity, 1 stop bit (default)
+    #[default]
     Format7E1,
     /// 7 data bits, even parity, 2 stop bits
     Format7E2,
@@ -25,19 +26,6 @@ pub enum UartFormat {
 }
 
 impl UartFormat {
-    /// Parse UART format from string
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "7e1" => Some(UartFormat::Format7E1),
-            "7e2" => Some(UartFormat::Format7E2),
-            "8n1" => Some(UartFormat::Format8N1),
-            "8e1" => Some(UartFormat::Format8E1),
-            "7o1" => Some(UartFormat::Format7O1),
-            "8n2" => Some(UartFormat::Format8N2),
-            _ => None,
-        }
-    }
-
     /// Convert UART format to string
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -70,7 +58,10 @@ impl UartFormat {
     /// Get number of stop bits
     pub fn stop_bits(&self) -> u8 {
         match self {
-            UartFormat::Format7E1 | UartFormat::Format8N1 | UartFormat::Format8E1 | UartFormat::Format7O1 => 1,
+            UartFormat::Format7E1
+            | UartFormat::Format8N1
+            | UartFormat::Format8E1
+            | UartFormat::Format7O1 => 1,
             UartFormat::Format7E2 | UartFormat::Format8N2 => 2,
         }
     }
@@ -81,17 +72,27 @@ impl UartFormat {
     }
 }
 
-impl Default for UartFormat {
-    fn default() -> Self {
-        UartFormat::Format7E1
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Parity {
     None,
     Even,
     Odd,
+}
+
+impl std::str::FromStr for UartFormat {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "7e1" => Ok(UartFormat::Format7E1),
+            "7e2" => Ok(UartFormat::Format7E2),
+            "8n1" => Ok(UartFormat::Format8N1),
+            "8e1" => Ok(UartFormat::Format8E1),
+            "7o1" => Ok(UartFormat::Format7O1),
+            "8n2" => Ok(UartFormat::Format8N2),
+            _ => Err(()),
+        }
+    }
 }
 
 /// Encode a single ASCII character into UART frame bits
@@ -131,9 +132,7 @@ pub fn encode_uart_frame(ch: u8, format: UartFormat) -> Vec<u8> {
     }
 
     // Stop bits (always 1)
-    for _ in 0..format.stop_bits() {
-        bits.push(1);
-    }
+    bits.extend(std::iter::repeat_n(1, format.stop_bits() as usize));
 
     bits
 }
@@ -175,7 +174,13 @@ pub fn decode_uart_frame(bits: &[u8], format: UartFormat) -> Option<(u8, bool)> 
     };
 
     // Check stop bits (should all be 1)
-    let stop_bit_start = 1 + data_bits as usize + if format.parity() != Parity::None { 1 } else { 0 };
+    let stop_bit_start = 1
+        + data_bits as usize
+        + if format.parity() != Parity::None {
+            1
+        } else {
+            0
+        };
     for i in 0..format.stop_bits() {
         if bits[stop_bit_start + i as usize] != 1 {
             return None; // Invalid stop bit
@@ -236,9 +241,9 @@ mod tests {
 
     #[test]
     fn test_format_from_str() {
-        assert_eq!(UartFormat::from_str("7e1"), Some(UartFormat::Format7E1));
-        assert_eq!(UartFormat::from_str("7E1"), Some(UartFormat::Format7E1));
-        assert_eq!(UartFormat::from_str("8N1"), Some(UartFormat::Format8N1));
-        assert_eq!(UartFormat::from_str("invalid"), None);
+        assert_eq!("7e1".parse::<UartFormat>(), Ok(UartFormat::Format7E1));
+        assert_eq!("7E1".parse::<UartFormat>(), Ok(UartFormat::Format7E1));
+        assert_eq!("8N1".parse::<UartFormat>(), Ok(UartFormat::Format8N1));
+        assert!("invalid".parse::<UartFormat>().is_err());
     }
 }

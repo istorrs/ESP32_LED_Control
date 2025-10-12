@@ -71,7 +71,11 @@ impl MeterHandler {
     }
 
     /// Build UART frame with proper framing using configured UART format
-    fn build_uart_frame(&self, byte: u8, uart_format: crate::uart_format::UartFormat) -> heapless::Vec<u8, 12> {
+    fn build_uart_frame(
+        &self,
+        byte: u8,
+        uart_format: crate::uart_format::UartFormat,
+    ) -> heapless::Vec<u8, 12> {
         // Use the uart_format module's encode function
         let bits = crate::uart_format::encode_uart_frame(byte, uart_format);
 

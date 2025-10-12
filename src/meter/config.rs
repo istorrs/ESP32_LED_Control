@@ -15,16 +15,6 @@ impl MeterType {
             MeterType::Neptune => UartFormat::Format7E2,
         }
     }
-
-    // Keep old framing() method for backwards compatibility
-    #[deprecated(since = "0.2.0", note = "Use default_format() instead")]
-    #[allow(deprecated)]
-    pub fn framing(&self) -> crate::mtu::UartFraming {
-        match self {
-            MeterType::Sensus => crate::mtu::UartFraming::SevenE1,
-            MeterType::Neptune => crate::mtu::UartFraming::SevenE2,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

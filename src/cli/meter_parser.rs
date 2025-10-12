@@ -10,7 +10,7 @@ pub enum MeterCommand {
     Reset,
     SetType(MeterType),
     SetMessage(String),
-    SetFormat(String),  // Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
+    SetFormat(String), // Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
     Enable,
     Disable,
     Empty,
@@ -84,13 +84,12 @@ impl MeterCommandParser {
                         MeterCommand::SetFormat(format_str)
                     } else {
                         MeterCommand::Unknown(
-                            "Invalid UART format. Valid formats: 7E1, 7E2, 8N1, 8E1, 7O1, 8N2".to_string()
+                            "Invalid UART format. Valid formats: 7E1, 7E2, 8N1, 8E1, 7O1, 8N2"
+                                .to_string(),
                         )
                     }
                 } else {
-                    MeterCommand::Unknown(
-                        "Usage: format <7E1|7E2|8N1|8E1|7O1|8N2>".to_string()
-                    )
+                    MeterCommand::Unknown("Usage: format <7E1|7E2|8N1|8E1|7O1|8N2>".to_string())
                 }
             }
             _ => MeterCommand::Unknown(format!(

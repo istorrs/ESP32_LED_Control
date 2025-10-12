@@ -219,15 +219,22 @@ impl CommandHandler {
                 if let Some(ref sender) = self.mtu_cmd_sender {
                     if let Some(ref mtu) = self.mtu {
                         if mtu.is_running() {
-                            response.push_str("Cannot change UART format while MTU is running.\r\n");
+                            response
+                                .push_str("Cannot change UART format while MTU is running.\r\n");
                             response.push_str("Use 'mtu_stop' first.");
-                        } else if let Some(format) = crate::uart_format::UartFormat::from_str(&format_str) {
+                        } else if let Ok(format) =
+                            format_str.parse::<crate::uart_format::UartFormat>()
+                        {
                             match sender.send(MtuCommand::SetUartFormat { format }) {
                                 Ok(_) => {
-                                    response.push_str(&format!("MTU UART format set to {}", format_str));
+                                    response.push_str(&format!(
+                                        "MTU UART format set to {}",
+                                        format_str
+                                    ));
                                 }
                                 Err(_) => {
-                                    response.push_str("Error: Failed to send command to MTU thread");
+                                    response
+                                        .push_str("Error: Failed to send command to MTU thread");
                                 }
                             }
                         } else {
