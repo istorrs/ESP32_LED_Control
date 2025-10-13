@@ -3,6 +3,7 @@
 //! This library provides modules for ESP32-based water meter MTU communication.
 
 pub mod cli;
+pub mod led;
 pub mod meter;
 pub mod mqtt;
 pub mod mtu;
@@ -14,6 +15,7 @@ pub use cli::{
     CliCommand, CliError, CommandHandler, CommandParser, MeterCommand, MeterCommandHandler,
     MeterCommandParser, Terminal,
 };
+pub use led::{LedManager, LedStatus};
 pub use meter::{MeterConfig, MeterHandler, MeterType};
 pub use mqtt::{MqttClient, MqttStatus};
 pub use mtu::{GpioMtuTimerV2, MtuCommand, MtuConfig, MtuError, MtuResult};

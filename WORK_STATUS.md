@@ -50,6 +50,7 @@ Makefile                      # Build targets for both apps
 - **UART0 CLI**: GPIO1 (TX), GPIO3 (RX) - 115200 baud
 - **Clock**: GPIO4 (output) - Generates 1200 baud clock
 - **Data**: GPIO5 (input) - Reads meter response
+- **Status LED**: GPIO2 (output) - Visual status indicator with blink patterns
 - **Protocol**: Configurable UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2), default 7E1
 
 ### Meter App (src/bin/meter_app.rs)

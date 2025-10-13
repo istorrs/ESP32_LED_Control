@@ -17,6 +17,10 @@ Both apps feature interactive serial CLI control over UART0 (115200 baud, USB-C 
 - **Serial CLI**: Interactive command-line interface with history, line editing, TAB autocompletion
 - **Background Thread Architecture**: Non-blocking operations with main CLI thread
 - **GPIO Communication**: 1200 baud serial over GPIO4 (clock) and GPIO5 (data)
+- **Status LED (GPIO2)**: Visual status indication with different blink patterns
+  - Off: Idle
+  - Slow blink (1 Hz): WiFi/MQTT operations
+  - Fast blink (5 Hz): Error state
 
 ### MTU App Features
 - Hardware timer ISR for precise 1200 baud clock generation

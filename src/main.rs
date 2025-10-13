@@ -162,6 +162,14 @@ fn main() -> anyhow::Result<()> {
 
     log::info!("✅ MTU background thread spawned");
 
+    // Initialize LED manager on GPIO2 (built-in LED on most ESP32 boards)
+    log::info!("💡 Initializing status LED on GPIO2...");
+    let led_pin = PinDriver::output(peripherals.pins.gpio2)?;
+    let led_pin_static: PinDriver<'static, esp_idf_hal::gpio::Gpio2, Output> =
+        unsafe { core::mem::transmute(led_pin) };
+    let led_manager = Arc::new(esp32_water_meter::LedManager::new(led_pin_static));
+    log::info!("✅ Status LED initialized (GPIO2)");
+
     // MQTT will be created on-demand when publishing data
     log::info!("📡 MQTT: On-demand mode (will connect only when publishing)");
 
@@ -198,6 +206,7 @@ fn main() -> anyhow::Result<()> {
     // waits for downlink messages, then disconnects everything
     let publish_with_connectivity = |wifi_manager: &Arc<Mutex<WifiManager>>,
                                      mtu_sender: &std::sync::mpsc::Sender<MtuCommand>,
+                                     led: &Arc<esp32_water_meter::LedManager>,
                                      message: &str,
                                      stats: (u32, u32, usize),
                                      baud_rate: u32,
@@ -206,6 +215,9 @@ fn main() -> anyhow::Result<()> {
                                      control_device: &str,
                                      client_id: &str| {
         let (successful, corrupted, cycles) = stats;
+
+        // Set LED to slow blink for WiFi/MQTT operations
+        led.set_status(esp32_water_meter::LedStatus::SlowBlink);
 
         log::info!("📡 On-demand publish: Connecting WiFi...");
 
@@ -458,6 +470,9 @@ fn main() -> anyhow::Result<()> {
         }
 
         log::info!("✅ On-demand publish cycle complete");
+
+        // Set LED back to idle (off)
+        led.set_status(esp32_water_meter::LedStatus::Off);
     };
 
     // Track last published cycle count for on-demand publishing
@@ -485,6 +500,7 @@ fn main() -> anyhow::Result<()> {
                     publish_with_connectivity(
                         wifi_manager,
                         &mtu_cmd_sender,
+                        &led_manager,
                         current_message.as_str(),
                         (successful, corrupted, cycles),
                         baud_rate,
