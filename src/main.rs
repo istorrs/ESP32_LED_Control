@@ -175,8 +175,9 @@ fn main() -> anyhow::Result<()> {
 
     // Initialize CLI components
     let mut terminal = Terminal::new(uart_tx, uart_rx);
-    let mut command_handler =
-        CommandHandler::new().with_mtu(Arc::clone(&mtu), mtu_cmd_sender.clone());
+    let mut command_handler = CommandHandler::new()
+        .with_mtu(Arc::clone(&mtu), mtu_cmd_sender.clone())
+        .with_led(Arc::clone(&led_manager));
 
     // Add WiFi to command handler if available
     if let Some(ref wifi_manager) = wifi {

@@ -1,4 +1,5 @@
 use super::{CliCommand, CliError};
+use crate::led::LedManager;
 use crate::mqtt::MqttClient;
 use crate::mtu::{GpioMtuTimerV2, MtuCommand};
 use crate::wifi::WifiManager;
@@ -12,6 +13,7 @@ pub struct CommandHandler {
     mtu_cmd_sender: Option<Sender<MtuCommand>>,
     wifi: Option<Arc<Mutex<WifiManager>>>,
     mqtt: Option<Arc<MqttClient>>,
+    led: Option<Arc<LedManager>>,
 }
 
 impl Default for CommandHandler {
@@ -28,6 +30,7 @@ impl CommandHandler {
             mtu_cmd_sender: None,
             wifi: None,
             mqtt: None,
+            led: None,
         }
     }
 
@@ -44,6 +47,11 @@ impl CommandHandler {
 
     pub fn with_mqtt(mut self, mqtt: Arc<MqttClient>) -> Self {
         self.mqtt = Some(mqtt);
+        self
+    }
+
+    pub fn with_led(mut self, led: Arc<LedManager>) -> Self {
+        self.led = Some(led);
         self
     }
 
@@ -113,6 +121,11 @@ impl CommandHandler {
                         if mtu.is_running() {
                             response.push_str("MTU is already running. Use 'mtu_stop' first.");
                         } else {
+                            // Set LED to solid on for MTU reading
+                            if let Some(ref led) = self.led {
+                                led.set_status(crate::led::LedStatus::SolidOn);
+                            }
+
                             // Send start command to MTU thread
                             match sender.send(MtuCommand::Start {
                                 duration_secs: duration_secs.into(),
@@ -144,6 +157,10 @@ impl CommandHandler {
                             // Send stop command to MTU thread
                             match sender.send(MtuCommand::Stop) {
                                 Ok(_) => {
+                                    // Set LED off when MTU stops
+                                    if let Some(ref led) = self.led {
+                                        led.set_status(crate::led::LedStatus::Off);
+                                    }
                                     response.push_str("MTU stop signal sent");
                                 }
                                 Err(_) => {
