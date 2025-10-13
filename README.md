@@ -226,6 +226,7 @@ Available commands:
   wifi_connect [ssid] [password] - Connect to WiFi
   wifi_reconnect   - Quick reconnect to default WiFi
   wifi_status      - Show WiFi connection status
+  wifi_scan        - Scan for available WiFi networks
   mqtt_status      - Show MQTT connection status (on-demand mode)
 ```
 

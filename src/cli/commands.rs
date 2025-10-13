@@ -342,6 +342,98 @@ impl CommandHandler {
                     response.push_str("WiFi Status: Not initialized");
                 }
             }
+            CliCommand::WifiScan => {
+                log::info!("CLI: WiFi scan requested");
+                if let Some(ref wifi) = self.wifi {
+                    match wifi.lock() {
+                        Ok(mut wifi_guard) => {
+                            response.push_str("Scanning for WiFi networks...\r\n");
+                            match wifi_guard.scan() {
+                                Ok(aps) => {
+                                    if aps.is_empty() {
+                                        response.push_str("\r\nNo networks found");
+                                    } else {
+                                        response.push_str(&format!(
+                                            "\r\nFound {} networks:\r\n\r\n",
+                                            aps.len()
+                                        ));
+                                        response.push_str(
+                                            "SSID                    RSSI  Ch  Security\r\n",
+                                        );
+                                        response.push_str(
+                                            "──────────────────────  ────  ──  ────────\r\n",
+                                        );
+
+                                        // Sort by signal strength (highest first)
+                                        let mut sorted_aps = aps;
+                                        sorted_aps.sort_by(|a, b| {
+                                            b.signal_strength.cmp(&a.signal_strength)
+                                        });
+
+                                        for ap in sorted_aps.iter().take(20) {
+                                            let ssid = if ap.ssid.is_empty() {
+                                                "<hidden>".to_string()
+                                            } else {
+                                                ap.ssid.to_string()
+                                            };
+
+                                            let auth = match ap.auth_method {
+                                                Some(esp_idf_svc::wifi::AuthMethod::None) => "Open",
+                                                Some(esp_idf_svc::wifi::AuthMethod::WEP) => "WEP",
+                                                Some(esp_idf_svc::wifi::AuthMethod::WPA) => "WPA",
+                                                Some(
+                                                    esp_idf_svc::wifi::AuthMethod::WPA2Personal,
+                                                ) => "WPA2",
+                                                Some(
+                                                    esp_idf_svc::wifi::AuthMethod::WPAWPA2Personal,
+                                                ) => "WPA/WPA2",
+                                                Some(
+                                                    esp_idf_svc::wifi::AuthMethod::WPA2Enterprise,
+                                                ) => "WPA2-Ent",
+                                                Some(
+                                                    esp_idf_svc::wifi::AuthMethod::WPA3Personal,
+                                                ) => "WPA3",
+                                                Some(
+                                                    esp_idf_svc::wifi::AuthMethod::WPA2WPA3Personal,
+                                                ) => "WPA2/WPA3",
+                                                None => "Unknown",
+                                                _ => "Other",
+                                            };
+
+                                            response.push_str(&format!(
+                                                "{:<22}  {:>4}  {:>2}  {}\r\n",
+                                                if ssid.len() > 22 {
+                                                    format!("{}...", &ssid[..19])
+                                                } else {
+                                                    ssid
+                                                },
+                                                ap.signal_strength,
+                                                ap.channel,
+                                                auth
+                                            ));
+                                        }
+
+                                        if sorted_aps.len() > 20 {
+                                            response.push_str(&format!(
+                                                "\r\n(Showing top 20 of {} networks)",
+                                                sorted_aps.len()
+                                            ));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    response.push_str(&format!("WiFi scan failed: {:?}", e));
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            response.push_str("WiFi scan failed: Lock error");
+                        }
+                    }
+                } else {
+                    response.push_str("WiFi scan failed: Not initialized");
+                }
+            }
             CliCommand::MqttConnect(_broker_url) => {
                 log::info!("CLI: MQTT connect requested");
                 response

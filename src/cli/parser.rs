@@ -31,6 +31,7 @@ impl CommandParser {
             "wifi_connect",
             "wifi_reconnect",
             "wifi_status",
+            "wifi_scan",
             "mqtt_connect",
             "mqtt_status",
             "mqtt_publish",
@@ -127,6 +128,7 @@ impl CommandParser {
             }
             "wifi_reconnect" => CliCommand::WifiReconnect,
             "wifi_status" => CliCommand::WifiStatus,
+            "wifi_scan" => CliCommand::WifiScan,
             "mqtt_connect" => {
                 if let Some(broker_url) = parts.next() {
                     CliCommand::MqttConnect(broker_url.to_string())

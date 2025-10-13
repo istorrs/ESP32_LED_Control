@@ -249,6 +249,7 @@ impl<'d> Terminal<'d> {
         self.write_line("  wifi_connect [ssid] [password] - Connect to WiFi (no args = default)")?;
         self.write_line("  wifi_reconnect - Quick reconnect to default WiFi")?;
         self.write_line("  wifi_status - Show WiFi connection status")?;
+        self.write_line("  wifi_scan   - Scan for available WiFi networks")?;
         self.write_line("  mqtt_connect <broker_url> - Connect to MQTT broker")?;
         self.write_line("  mqtt_status - Show MQTT connection status")?;
         self.write_line("  mqtt_publish <topic> <message> - Publish MQTT message")?;

@@ -36,6 +36,7 @@ pub enum CliCommand {
     WifiConnect(Option<String>, Option<String>), // ssid, password (None = use default)
     WifiStatus,
     WifiReconnect,       // Reconnect using stored credentials
+    WifiScan,            // Scan for available WiFi networks
     MqttConnect(String), // broker_url
     MqttStatus,
     MqttPublish(String, String), // topic, message

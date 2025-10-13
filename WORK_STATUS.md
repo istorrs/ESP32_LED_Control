@@ -134,6 +134,11 @@ cargo run --bin meter_app --release
 - `mtu_baud <rate>` - Set MTU baud rate (1-115200, default 1200)
 - `mtu_format <fmt>` - Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
 - `mtu_reset` - Reset MTU statistics
+- `wifi_connect [ssid] [password]` - Connect to WiFi (no args = default)
+- `wifi_reconnect` - Quick reconnect to default WiFi
+- `wifi_status` - Show WiFi connection status
+- `wifi_scan` - Scan for available WiFi networks
+- `mqtt_status` - Show MQTT connection status (on-demand mode)
 
 ### Meter App Commands
 - `help` - Show help

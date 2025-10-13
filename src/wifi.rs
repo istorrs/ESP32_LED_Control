@@ -146,6 +146,16 @@ impl WifiManager {
         ))
     }
 
+    pub fn scan(&mut self) -> Result<Vec<esp_idf_svc::wifi::AccessPointInfo>> {
+        info!("📡 WiFi: Starting scan...");
+        let scan_result = self.wifi.wifi_mut().scan()?;
+        info!(
+            "✅ WiFi: Scan completed, found {} networks",
+            scan_result.len()
+        );
+        Ok(scan_result)
+    }
+
     pub fn disconnect(&mut self) -> Result<()> {
         if self.wifi.is_connected().unwrap_or(false) {
             info!("🔌 WiFi: Disconnecting...");
