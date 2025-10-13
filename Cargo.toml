@@ -33,6 +33,8 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 log = "0.4"
 anyhow = "1.0"
 heapless = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+libc = "0.2"
 
 [build-dependencies]
 embuild = "0.33"

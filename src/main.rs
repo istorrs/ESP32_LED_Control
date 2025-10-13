@@ -9,8 +9,10 @@ use esp_idf_hal::uart::{config::Config as UartConfig, UartDriver};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::mqtt::client::QoS;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use esp_idf_svc::sntp;
 use esp_idf_svc::sys;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 /// Get ESP32 base MAC address (chip ID) as a hex string
 fn get_chip_id() -> String {
@@ -222,7 +224,41 @@ fn main() -> anyhow::Result<()> {
 
         log::info!("✅ WiFi connected");
 
-        // Step 2: Create MQTT client with message handler for control topic
+        // Step 2: Synchronize time with NTP server
+        log::info!("🕒 Synchronizing time with NTP server...");
+        let sync = Arc::new((Mutex::new(false), Condvar::new()));
+        let sntp = {
+            let sync = sync.clone();
+            sntp::EspSntp::new_with_callback(&sntp::SntpConf::default(), move |_| {
+                let (lock, cvar) = &*sync;
+                let mut guard = lock.lock().unwrap();
+                *guard = true;
+                cvar.notify_one();
+            })
+            .unwrap()
+        };
+
+        // Wait for sync with 10-second timeout
+        let (lock, cvar) = &*sync;
+        let mut guard = lock.lock().unwrap();
+        let mut synced = *guard;
+
+        if !synced {
+            let (new_guard, timeout_result) =
+                cvar.wait_timeout(guard, Duration::from_secs(10)).unwrap();
+            guard = new_guard;
+            synced = *guard && !timeout_result.timed_out();
+        }
+
+        if synced {
+            log::info!("✅ Time synchronized with NTP");
+        } else {
+            log::warn!("⚠️  Time synchronization timed out (continuing anyway)");
+        }
+        drop(guard);
+        drop(sntp);
+
+        // Step 3: Create MQTT client with message handler for control topic
         log::info!("📡 Creating MQTT client...");
 
         // Clone MTU sender for MQTT callback
@@ -315,7 +351,7 @@ fn main() -> anyhow::Result<()> {
             }
         };
 
-        // Step 3: Wait for MQTT connection (up to 10 seconds)
+        // Step 4: Wait for MQTT connection (up to 10 seconds)
         log::info!("⏳ Waiting for MQTT connection...");
         for i in 0..20 {
             if mqtt_client.is_connected() {
@@ -333,7 +369,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        // Step 4: Subscribe to control topics (both shared and device-specific)
+        // Step 5: Subscribe to control topics (both shared and device-specific)
         log::info!("📥 Subscribing to shared control topic: {}", control_shared);
         if let Err(e) = mqtt_client.subscribe(control_shared, QoS::AtLeastOnce) {
             log::warn!("⚠️  Failed to subscribe to shared control topic: {:?}", e);
@@ -344,8 +380,16 @@ fn main() -> anyhow::Result<()> {
             log::warn!("⚠️  Failed to subscribe to device control topic: {:?}", e);
         }
 
-        // Step 5: Publish MTU data with device identification
-        // Get device identifiers
+        // Step 6: Get timestamp
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let timestamp_str =
+            chrono::DateTime::from_timestamp(now.as_secs() as i64, now.subsec_nanos())
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_else(|| "<unknown>".to_string());
+
+        // Step 7: Publish MTU data with device identification and timestamp
         let chip_id = get_chip_id();
         let (wifi_mac, wifi_ip) = if let Ok(wifi_guard) = wifi_manager.lock() {
             let mac = wifi_guard
@@ -361,6 +405,7 @@ fn main() -> anyhow::Result<()> {
         };
 
         let payload = serde_json::json!({
+            "timestamp": timestamp_str,
             "chip_id": chip_id,
             "wifi_mac": wifi_mac,
             "wifi_ip": wifi_ip,
@@ -394,17 +439,17 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        // Step 6: Wait 5 seconds for queued downlink messages
+        // Step 8: Wait 5 seconds for queued downlink messages
         log::info!("⏳ Waiting 5s for queued downlink messages...");
         std::thread::sleep(std::time::Duration::from_secs(5));
 
-        // Step 7: Signal MQTT connection handler to shutdown (prevents errors/retries)
+        // Step 9: Signal MQTT connection handler to shutdown (prevents errors/retries)
         mqtt_client.shutdown();
 
         // Drop the client (connection handler already exited cleanly)
         drop(mqtt_client);
 
-        // Step 8: Disconnect WiFi
+        // Step 10: Disconnect WiFi
         log::info!("🔌 Disconnecting WiFi...");
         if let Ok(mut wifi_guard) = wifi_manager.lock() {
             if let Err(e) = wifi_guard.disconnect() {
