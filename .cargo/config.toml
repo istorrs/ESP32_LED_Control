@@ -3,8 +3,8 @@ target = "xtensa-esp32-espidf"
 
 [target.xtensa-esp32-espidf]
 linker = "ldproxy"
-# Default monitor baud - espflash uses optimal flash speed automatically
-runner = "espflash flash --monitor"
+# Flash at 460800 baud (standard ESP32 speed), monitor at 115200 (CLI speed)
+runner = "espflash flash --baud 460800 --monitor"
 
 [unstable]
 build-std = ["std", "panic_abort"]
