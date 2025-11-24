@@ -6,12 +6,12 @@ MAX_RETRIES=5
 RETRY_COUNT=0
 
 if [ "$1" == "release" ]; then
-    BUILD_CMD="cargo build --bin mtu_app --release"
-    FLASH_CMD="cargo run --bin mtu_app --release"
+    BUILD_CMD="cargo build --bin led_app --release"
+    FLASH_CMD="cargo run --bin led_app --release"
     echo "🔧 Building release version..."
 else
-    BUILD_CMD="cargo build --bin mtu_app"
-    FLASH_CMD="cargo run --bin mtu_app"
+    BUILD_CMD="cargo build --bin led_app"
+    FLASH_CMD="cargo run --bin led_app"
     echo "🔧 Building debug version..."
 fi
 
