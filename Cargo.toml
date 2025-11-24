@@ -1,19 +1,15 @@
 [package]
-name = "esp32-water-meter"
+name = "esp32-led-flasher"
 version = "0.1.0"
-authors = ["Water Meter Team"]
+authors = ["LED Flasher Team"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "ESP32 water meter MTU interface and simulator with ESP-IDF"
+description = "ESP32 LED flasher with configurable pulse timing, WiFi, and MQTT control"
 
-# Multiple binaries - flash one or the other
+# Single binary
 [[bin]]
-name = "mtu_app"
+name = "led_app"
 path = "src/main.rs"
-
-[[bin]]
-name = "meter_app"
-path = "src/bin/meter_app.rs"
 
 [dependencies]
 # ESP-IDF (std approach - mature for ESP32)

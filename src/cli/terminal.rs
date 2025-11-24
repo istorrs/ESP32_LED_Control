@@ -240,39 +240,17 @@ impl<'d> Terminal<'d> {
         self.write_line("  clear       - Clear terminal")?;
         self.write_line("  reset       - Reset system")?;
         self.write_line("  echo <text> - Echo text back")?;
-        self.write_line("  mtu_start [dur] - Start MTU operation (default 30s)")?;
-        self.write_line("  mtu_stop    - Stop MTU operation")?;
-        self.write_line("  mtu_status  - Show MTU status")?;
-        self.write_line("  mtu_baud <rate> - Set MTU baud rate (1-115200, default 1200)")?;
-        self.write_line("  mtu_format <fmt> - Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)")?;
-        self.write_line("  mtu_reset   - Reset MTU statistics")?;
+        self.write_line("  led_on      - Turn LED on (solid)")?;
+        self.write_line("  led_off     - Turn LED off")?;
+        self.write_line("  led_pulse <dur_ms> <period_ms> - Set custom pulse (1-2000ms, 3000-3600000ms)")?;
+        self.write_line("  led_status  - Show LED status and configuration")?;
+        self.write_line("  led_blink <hz> - Set blink frequency (1-10 Hz)")?;
         self.write_line("  wifi_connect [ssid] [password] - Connect to WiFi (no args = default)")?;
         self.write_line("  wifi_reconnect - Quick reconnect to default WiFi")?;
         self.write_line("  wifi_status - Show WiFi connection status")?;
         self.write_line("  wifi_scan   - Scan for available WiFi networks")?;
-        self.write_line("  mqtt_connect <broker_url> - Connect to MQTT broker")?;
         self.write_line("  mqtt_status - Show MQTT connection status")?;
         self.write_line("  mqtt_publish <topic> <message> - Publish MQTT message")?;
-        self.write_line("")?;
-        self.write_line("Use TAB to autocomplete commands")?;
-        self.write_line("Use UP/DOWN arrows to navigate command history")?;
-        self.write_line("Use LEFT/RIGHT arrows to move cursor and edit")?;
-        Ok(())
-    }
-
-    pub fn show_meter_help(&mut self) -> Result<(), CliError> {
-        self.write_line("Available commands:")?;
-        self.write_line("  help        - Show this help")?;
-        self.write_line("  version     - Show firmware version")?;
-        self.write_line("  status      - Show meter status and statistics")?;
-        self.write_line("  uptime      - Show system uptime")?;
-        self.write_line("  clear       - Clear terminal")?;
-        self.write_line("  reset       - Reset system")?;
-        self.write_line("  enable      - Enable meter response to clock signals")?;
-        self.write_line("  disable     - Disable meter response")?;
-        self.write_line("  type <sensus|neptune> - Set meter type (7E1 or 7E2)")?;
-        self.write_line("  format <fmt> - Set UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)")?;
-        self.write_line("  message <text> - Set response message (\\r added automatically)")?;
         self.write_line("")?;
         self.write_line("Use TAB to autocomplete commands")?;
         self.write_line("Use UP/DOWN arrows to navigate command history")?;

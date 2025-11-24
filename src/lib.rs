@@ -1,24 +1,15 @@
-//! ESP32 Water Meter MTU Interface Library
+//! ESP32 LED Flasher Library
 //!
-//! This library provides modules for ESP32-based water meter MTU communication.
+//! This library provides modules for ESP32-based LED control with WiFi and MQTT.
 
 pub mod cli;
 pub mod led;
-pub mod meter;
 pub mod mqtt;
-pub mod mtu;
 pub mod network_config;
-pub mod uart_format;
 pub mod wifi;
 
-pub use cli::{
-    CliCommand, CliError, CommandHandler, CommandParser, MeterCommand, MeterCommandHandler,
-    MeterCommandParser, Terminal,
-};
-pub use led::{LedManager, LedStatus};
-pub use meter::{MeterConfig, MeterHandler, MeterType};
+pub use cli::{CliCommand, CliError, CommandHandler, CommandParser, Terminal};
+pub use led::{LedManager, LedStatus, PulseConfig};
 pub use mqtt::{MqttClient, MqttStatus};
-pub use mtu::{GpioMtuTimerV2, MtuCommand, MtuConfig, MtuError, MtuResult};
-pub use network_config::{MqttConfig, MtuMqttTopics, WifiConfig};
-pub use uart_format::{Parity, UartFormat};
+pub use network_config::{MqttConfig, WifiConfig};
 pub use wifi::WifiManager;

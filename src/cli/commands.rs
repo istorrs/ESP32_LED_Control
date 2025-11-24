@@ -1,16 +1,12 @@
 use super::{CliCommand, CliError};
-use crate::led::LedManager;
+use crate::led::{LedManager, LedStatus, PulseConfig};
 use crate::mqtt::MqttClient;
-use crate::mtu::{GpioMtuTimerV2, MtuCommand};
 use crate::wifi::WifiManager;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub struct CommandHandler {
     start_time: Instant,
-    mtu: Option<Arc<GpioMtuTimerV2>>,
-    mtu_cmd_sender: Option<Sender<MtuCommand>>,
     wifi: Option<Arc<Mutex<WifiManager>>>,
     mqtt: Option<Arc<MqttClient>>,
     led: Option<Arc<LedManager>>,
@@ -26,18 +22,10 @@ impl CommandHandler {
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
-            mtu: None,
-            mtu_cmd_sender: None,
             wifi: None,
             mqtt: None,
             led: None,
         }
-    }
-
-    pub fn with_mtu(mut self, mtu: Arc<GpioMtuTimerV2>, cmd_sender: Sender<MtuCommand>) -> Self {
-        self.mtu = Some(mtu);
-        self.mtu_cmd_sender = Some(cmd_sender);
-        self
     }
 
     pub fn with_wifi(mut self, wifi: Arc<Mutex<WifiManager>>) -> Self {
@@ -68,15 +56,15 @@ impl CommandHandler {
             }
             CliCommand::Version => {
                 log::info!("CLI: Version requested");
-                response.push_str("ESP32 Water Meter MTU Interface v1.0.0\r\n");
+                response.push_str("ESP32 LED Flasher v1.0.0\r\n");
                 response.push_str("Built with ESP-IDF");
             }
             CliCommand::Status => {
                 log::info!("CLI: Status requested");
                 response.push_str("System Status:\r\n");
-                response.push_str("  Firmware: ESP32 Water Meter MTU v1.0.0\r\n");
+                response.push_str("  Firmware: ESP32 LED Flasher v1.0.0\r\n");
                 response.push_str("  Platform: ESP32 with ESP-IDF\r\n");
-                response.push_str("  MTU: GPIO4 (clock), GPIO5 (data)\r\n");
+                response.push_str("  LED: GPIO2 (built-in LED)\r\n");
                 response.push_str("  UART: USB-C (UART0)");
             }
             CliCommand::Uptime => {
@@ -112,167 +100,90 @@ impl CommandHandler {
                 log::info!("CLI: Echo requested: {}", text);
                 response.push_str(&text);
             }
-            CliCommand::MtuStart(duration) => {
-                log::info!("CLI: MTU start requested");
-                if let Some(ref sender) = self.mtu_cmd_sender {
-                    if let Some(ref mtu) = self.mtu {
-                        let duration_secs = duration.unwrap_or(30);
-
-                        if mtu.is_running() {
-                            response.push_str("MTU is already running. Use 'mtu_stop' first.");
-                        } else {
-                            // Set LED to solid on for MTU reading
-                            if let Some(ref led) = self.led {
-                                led.set_status(crate::led::LedStatus::SolidOn);
-                            }
-
-                            // Send start command to MTU thread
-                            match sender.send(MtuCommand::Start {
-                                duration_secs: duration_secs.into(),
-                            }) {
-                                Ok(_) => {
-                                    response.push_str(&format!(
-                                        "MTU operation started for {} seconds",
-                                        duration_secs
-                                    ));
-                                }
-                                Err(_) => {
-                                    response
-                                        .push_str("Error: Failed to send command to MTU thread");
-                                }
-                            }
+            // LED Commands
+            CliCommand::LedOn => {
+                log::info!("CLI: LED on requested");
+                if let Some(ref led) = self.led {
+                    led.turn_on();
+                    response.push_str("LED turned ON");
+                } else {
+                    response.push_str("LED not initialized");
+                }
+            }
+            CliCommand::LedOff => {
+                log::info!("CLI: LED off requested");
+                if let Some(ref led) = self.led {
+                    led.turn_off();
+                    response.push_str("LED turned OFF");
+                } else {
+                    response.push_str("LED not initialized");
+                }
+            }
+            CliCommand::LedPulse(duration_ms, period_ms) => {
+                log::info!(
+                    "CLI: LED pulse requested - duration: {}ms, period: {}ms",
+                    duration_ms,
+                    period_ms
+                );
+                if let Some(ref led) = self.led {
+                    match PulseConfig::new(duration_ms, period_ms) {
+                        Ok(config) => {
+                            led.set_pulse(config);
+                            response.push_str(&format!(
+                                "LED pulse set: {}ms ON / {}ms period",
+                                duration_ms, period_ms
+                            ));
                         }
-                    } else {
-                        response.push_str("MTU not configured");
-                    }
-                } else {
-                    response.push_str("MTU not configured");
-                }
-            }
-            CliCommand::MtuStop => {
-                log::info!("CLI: MTU stop requested");
-                if let Some(ref sender) = self.mtu_cmd_sender {
-                    if let Some(ref mtu) = self.mtu {
-                        if mtu.is_running() {
-                            // Send stop command to MTU thread
-                            match sender.send(MtuCommand::Stop) {
-                                Ok(_) => {
-                                    // Set LED off when MTU stops
-                                    if let Some(ref led) = self.led {
-                                        led.set_status(crate::led::LedStatus::Off);
-                                    }
-                                    response.push_str("MTU stop signal sent");
-                                }
-                                Err(_) => {
-                                    response
-                                        .push_str("Error: Failed to send command to MTU thread");
-                                }
-                            }
-                        } else {
-                            response.push_str("MTU is not running");
+                        Err(e) => {
+                            response.push_str(&format!("Invalid pulse configuration: {}", e));
                         }
-                    } else {
-                        response.push_str("MTU not configured");
                     }
                 } else {
-                    response.push_str("MTU not configured");
+                    response.push_str("LED not initialized");
                 }
             }
-            CliCommand::MtuStatus => {
-                log::info!("CLI: MTU status requested");
-                if let Some(ref mtu) = self.mtu {
-                    let baud_rate = mtu.get_baud_rate();
-                    let uart_format = mtu.get_uart_format();
-                    let (successful, corrupted, cycles) = mtu.get_stats();
-                    let total_reads = successful + corrupted;
-
-                    response.push_str("MTU Status:\r\n");
-                    response.push_str(&format!(
-                        "  State: {}\r\n",
-                        if mtu.is_running() {
-                            "Running"
-                        } else {
-                            "Stopped"
+            CliCommand::LedStatus => {
+                log::info!("CLI: LED status requested");
+                if let Some(ref led) = self.led {
+                    let status = led.get_status();
+                    response.push_str("LED Status:\r\n");
+                    match status {
+                        LedStatus::Off => {
+                            response.push_str("  State: OFF");
                         }
-                    ));
-                    response.push_str(&format!("  Baud rate: {} bps\r\n", baud_rate));
-                    response.push_str(&format!("  UART format: {}\r\n", uart_format.as_str()));
-                    response.push_str("  Pins: GPIO4 (clock), GPIO5 (data)\r\n");
-                    response.push_str(&format!("  Total cycles: {}\r\n", cycles));
-                    response.push_str("  Statistics:\r\n");
-                    response.push_str(&format!("    Successful reads: {}\r\n", successful));
-                    response.push_str(&format!("    Corrupted reads: {}\r\n", corrupted));
-
-                    if total_reads > 0 {
-                        let success_rate = (successful as f32 / total_reads as f32) * 100.0;
-                        response.push_str(&format!("    Success rate: {:.1}%\r\n", success_rate));
-                    }
-
-                    if let Some(last_msg) = mtu.get_last_message() {
-                        response.push_str(&format!("  Last message: {}", last_msg.as_str()));
-                    } else {
-                        response.push_str("  Last message: None");
-                    }
-                } else {
-                    response.push_str("MTU not configured");
-                }
-            }
-            CliCommand::MtuBaud(baud_rate) => {
-                log::info!("CLI: MTU baud rate set to {}", baud_rate);
-                if let Some(ref mtu) = self.mtu {
-                    if mtu.is_running() {
-                        response.push_str("Cannot change baud rate while MTU is running.\r\n");
-                        response.push_str("Use 'mtu_stop' first.");
-                    } else {
-                        mtu.set_baud_rate(baud_rate);
-                        response.push_str(&format!("MTU baud rate set to {} bps", baud_rate));
-                    }
-                } else {
-                    response.push_str("MTU not configured");
-                }
-            }
-            CliCommand::MtuFormat(format_str) => {
-                log::info!("CLI: MTU UART format set to {}", format_str);
-                if let Some(ref sender) = self.mtu_cmd_sender {
-                    if let Some(ref mtu) = self.mtu {
-                        if mtu.is_running() {
-                            response
-                                .push_str("Cannot change UART format while MTU is running.\r\n");
-                            response.push_str("Use 'mtu_stop' first.");
-                        } else if let Ok(format) =
-                            format_str.parse::<crate::uart_format::UartFormat>()
-                        {
-                            match sender.send(MtuCommand::SetUartFormat { format }) {
-                                Ok(_) => {
-                                    response.push_str(&format!(
-                                        "MTU UART format set to {}",
-                                        format_str
-                                    ));
-                                }
-                                Err(_) => {
-                                    response
-                                        .push_str("Error: Failed to send command to MTU thread");
-                                }
-                            }
-                        } else {
-                            response.push_str("Invalid UART format");
+                        LedStatus::SolidOn => {
+                            response.push_str("  State: ON (solid)");
                         }
-                    } else {
-                        response.push_str("MTU not configured");
+                        LedStatus::CustomPulse(config) => {
+                            response.push_str(&format!(
+                                "  State: Pulsing\r\n  Duration: {}ms\r\n  Period: {}ms",
+                                config.duration_ms, config.period_ms
+                            ));
+                            let duty_cycle =
+                                (config.duration_ms as f32 / config.period_ms as f32) * 100.0;
+                            response.push_str(&format!("\r\n  Duty cycle: {:.1}%", duty_cycle));
+                        }
+                        LedStatus::SlowBlink => {
+                            response.push_str("  State: Slow blink (1 Hz)");
+                        }
+                        LedStatus::FastBlink => {
+                            response.push_str("  State: Fast blink (5 Hz)");
+                        }
                     }
                 } else {
-                    response.push_str("MTU not configured");
+                    response.push_str("LED not initialized");
                 }
             }
-            CliCommand::MtuReset => {
-                log::info!("CLI: MTU statistics reset requested");
-                if let Some(ref mtu) = self.mtu {
-                    mtu.reset_stats();
-                    response.push_str("MTU statistics reset");
+            CliCommand::LedBlink(frequency_hz) => {
+                log::info!("CLI: LED blink requested - frequency: {}Hz", frequency_hz);
+                if let Some(ref led) = self.led {
+                    led.set_blink(frequency_hz);
+                    response.push_str(&format!("LED blink set to {} Hz", frequency_hz));
                 } else {
-                    response.push_str("MTU not configured");
+                    response.push_str("LED not initialized");
                 }
             }
+            // WiFi Commands
             CliCommand::WifiConnect(ssid, password) => {
                 log::info!("CLI: WiFi connect requested");
                 if let Some(ref wifi) = self.wifi {
@@ -374,88 +285,45 @@ impl CommandHandler {
                                             "\r\nFound {} networks:\r\n\r\n",
                                             aps.len()
                                         ));
+
+                                        // Format as table
                                         response.push_str(
-                                            "SSID                    RSSI  Ch  Security\r\n",
+                                            "SSID                            | RSSI | Ch | Sec\r\n",
                                         );
                                         response.push_str(
-                                            "──────────────────────  ────  ──  ────────\r\n",
+                                            "--------------------------------|------|----|---------\r\n",
                                         );
 
-                                        // Sort by signal strength (highest first)
-                                        let mut sorted_aps = aps;
-                                        sorted_aps.sort_by(|a, b| {
-                                            b.signal_strength.cmp(&a.signal_strength)
-                                        });
-
-                                        for ap in sorted_aps.iter().take(20) {
-                                            let ssid = if ap.ssid.is_empty() {
-                                                "<hidden>".to_string()
+                                        for ap in aps {
+                                            // Pad SSID to 31 chars
+                                            let ssid = ap.ssid.as_str();
+                                            let ssid_padded = if ssid.len() > 31 {
+                                                &ssid[..31]
                                             } else {
-                                                ap.ssid.to_string()
-                                            };
-
-                                            let auth = match ap.auth_method {
-                                                Some(esp_idf_svc::wifi::AuthMethod::None) => "Open",
-                                                Some(esp_idf_svc::wifi::AuthMethod::WEP) => "WEP",
-                                                Some(esp_idf_svc::wifi::AuthMethod::WPA) => "WPA",
-                                                Some(
-                                                    esp_idf_svc::wifi::AuthMethod::WPA2Personal,
-                                                ) => "WPA2",
-                                                Some(
-                                                    esp_idf_svc::wifi::AuthMethod::WPAWPA2Personal,
-                                                ) => "WPA/WPA2",
-                                                Some(
-                                                    esp_idf_svc::wifi::AuthMethod::WPA2Enterprise,
-                                                ) => "WPA2-Ent",
-                                                Some(
-                                                    esp_idf_svc::wifi::AuthMethod::WPA3Personal,
-                                                ) => "WPA3",
-                                                Some(
-                                                    esp_idf_svc::wifi::AuthMethod::WPA2WPA3Personal,
-                                                ) => "WPA2/WPA3",
-                                                None => "Unknown",
-                                                _ => "Other",
+                                                ssid
                                             };
 
                                             response.push_str(&format!(
-                                                "{:<22}  {:>4}  {:>2}  {}\r\n",
-                                                if ssid.len() > 22 {
-                                                    format!("{}...", &ssid[..19])
-                                                } else {
-                                                    ssid
-                                                },
-                                                ap.signal_strength,
-                                                ap.channel,
-                                                auth
-                                            ));
-                                        }
-
-                                        if sorted_aps.len() > 20 {
-                                            response.push_str(&format!(
-                                                "\r\n(Showing top 20 of {} networks)",
-                                                sorted_aps.len()
+                                                "{:31} | {:4} | {:2} | {:?}\r\n",
+                                                ssid_padded, ap.signal_strength, ap.channel, ap.auth
                                             ));
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    response.push_str(&format!("WiFi scan failed: {:?}", e));
+                                    response.push_str(&format!("\r\nScan failed: {:?}", e));
                                 }
                             }
                         }
                         Err(_) => {
-                            response.push_str("WiFi scan failed: Lock error");
+                            response.push_str("WiFi manager lock error");
                         }
                     }
                 } else {
-                    response.push_str("WiFi scan failed: Not initialized");
+                    response.push_str("WiFi not initialized");
                 }
             }
-            CliCommand::MqttConnect(_broker_url) => {
-                log::info!("CLI: MQTT connect requested");
-                response
-                    .push_str("MQTT connect not available - MQTT must be initialized at startup");
-            }
+            // MQTT Commands
             CliCommand::MqttStatus => {
                 log::info!("CLI: MQTT status requested");
                 if let Some(ref mqtt) = self.mqtt {

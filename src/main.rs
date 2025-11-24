@@ -1,17 +1,16 @@
-use esp32_water_meter::cli::{CommandHandler, CommandParser, Terminal};
-use esp32_water_meter::mqtt::MqttClient;
-use esp32_water_meter::mtu::{GpioMtuTimerV2, MtuCommand, MtuConfig};
-use esp32_water_meter::wifi::WifiManager;
+use esp32_led_flasher::cli::{CommandHandler, CommandParser, Terminal};
+use esp32_led_flasher::led::{LedManager, PulseConfig};
+use esp32_led_flasher::mqtt::MqttClient;
+use esp32_led_flasher::wifi::WifiManager;
 use esp_idf_hal::delay::FreeRtos;
-use esp_idf_hal::gpio::{Input, Output, PinDriver};
+use esp_idf_hal::gpio::{Output, PinDriver};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::uart::{config::Config as UartConfig, UartDriver};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::mqtt::client::QoS;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
-use esp_idf_svc::sntp;
 use esp_idf_svc::sys;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Get ESP32 base MAC address (chip ID) as a hex string
@@ -33,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     // Initialize logging
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    log::info!("ESP32 Water Meter MTU Interface with CLI");
+    log::info!("ESP32 LED Flasher with WiFi and MQTT Control");
     log::info!("Initializing...");
 
     let peripherals = Peripherals::take()?;
@@ -54,23 +53,30 @@ fn main() -> anyhow::Result<()> {
 
     // MQTT Configuration - Mosquitto public test broker
     const MQTT_BROKER: &str = "mqtt://test.mosquitto.org:1883";
-    const MQTT_PUBLISH_TOPIC: &str = "istorrs/mtu/data";
-    const MQTT_CONTROL_TOPIC_SHARED: &str = "istorrs/mtu/control"; // Shared topic for broadcast commands
+    const MQTT_STATUS_TOPIC: &str = "istorrs/led/status";
+    const MQTT_CONTROL_TOPIC_SHARED: &str = "istorrs/led/control"; // Shared topic for broadcast commands
 
     // Device-specific MQTT topics based on chip ID
-    let mqtt_client_id = format!("esp32-mtu-{}", chip_id.replace(":", ""));
-    let mqtt_control_topic_device = format!("istorrs/mtu/{}/control", chip_id);
+    let mqtt_client_id = format!("esp32-led-{}", chip_id.replace(":", ""));
+    let mqtt_control_topic_device = format!("istorrs/led/{}/control", chip_id);
+    let mqtt_status_topic_device = format!("istorrs/led/{}/status", chip_id);
 
     log::info!("📡 MQTT Client ID: {}", mqtt_client_id);
-    log::info!("📡 MQTT Control Topics:");
-    log::info!("   Shared:  {}", MQTT_CONTROL_TOPIC_SHARED);
-    log::info!("   Device:  {}", mqtt_control_topic_device);
+    log::info!("📡 MQTT Topics:");
+    log::info!("   Control (shared): {}", MQTT_CONTROL_TOPIC_SHARED);
+    log::info!("   Control (device): {}", mqtt_control_topic_device);
+    log::info!("   Status (device):  {}", mqtt_status_topic_device);
 
-    // Initialize WiFi manager but don't connect yet (on-demand connection)
+    // Initialize LED on GPIO2 (built-in LED) with default pulse
+    log::info!("💡 Initializing LED on GPIO2 with default pulse (500ms / 5s)...");
+    let led_pin = PinDriver::output(peripherals.pins.gpio2)?;
+    let led_manager = Arc::new(LedManager::new(led_pin));
+    log::info!("✅ LED initialized and pulsing");
+
+    // Initialize WiFi and connect immediately (always-on mode)
     let wifi = if WIFI_SSID != "YOUR_SSID" {
-        log::info!("🌐 Initializing WiFi manager (on-demand mode)...");
+        log::info!("🌐 Connecting to WiFi...");
         log::info!("  SSID: {}", WIFI_SSID);
-        log::info!("  Password length: {} chars", WIFI_PASSWORD.len());
 
         match WifiManager::new(
             peripherals.modem,
@@ -79,499 +85,263 @@ fn main() -> anyhow::Result<()> {
             WIFI_SSID,
             WIFI_PASSWORD,
         ) {
-            Ok(mut wifi) => {
-                log::info!("✅ WiFi manager created");
-
-                // Disconnect immediately for on-demand usage
-                log::info!("🔌 Disconnecting WiFi (will reconnect on-demand for MQTT publish)");
-                if let Err(e) = wifi.disconnect() {
-                    log::warn!("⚠️  WiFi disconnect failed: {:?}", e);
+            Ok(wifi) => {
+                log::info!("✅ WiFi connected successfully");
+                if let Ok(ip) = wifi.get_ip() {
+                    log::info!("📡 IP Address: {}", ip);
                 }
-
                 Some(Arc::new(Mutex::new(wifi)))
             }
             Err(e) => {
-                log::error!("❌ WiFi initialization failed: {:?}", e);
-                log::warn!("⚠️  Continuing without WiFi - use 'wifi_connect' command to retry");
-                log::warn!(
-                    "⚠️  Note: WiFi requires modem peripheral which is consumed on first init"
-                );
-                log::warn!("⚠️  Recommendation: Fix WiFi credentials and reboot");
+                log::error!("❌ WiFi connection failed: {:?}", e);
+                log::warn!("⚠️  Continuing without WiFi - LED control will be CLI-only");
                 None
             }
         }
     } else {
-        log::info!("WiFi disabled (update WIFI_SSID/WIFI_PASSWORD to enable)");
+        log::info!("⏭️  WiFi not configured (update WIFI_SSID in main.rs)");
         None
     };
 
-    // Initialize UART0 for CLI (USB-C connection)
-    log::info!("Initializing UART0 for CLI (USB-C)...");
-    let uart_config = UartConfig::new().baudrate(115200.into());
-    let mut uart = UartDriver::new(
+    // Initialize MQTT and connect immediately (always-on mode)
+    let mqtt = if wifi.is_some() {
+        log::info!("📡 Connecting to MQTT broker: {}", MQTT_BROKER);
+
+        match MqttClient::new(MQTT_BROKER, &mqtt_client_id) {
+            Ok(mut mqtt_client) => {
+                log::info!("✅ MQTT connected successfully");
+
+                // Subscribe to LED control topics
+                log::info!("📬 Subscribing to control topics...");
+                if let Err(e) = mqtt_client.subscribe(&mqtt_control_topic_shared, QoS::AtMostOnce)
+                {
+                    log::warn!("⚠️  Failed to subscribe to shared control topic: {:?}", e);
+                } else {
+                    log::info!("  ✅ Subscribed to: {}", mqtt_control_topic_shared);
+                }
+
+                if let Err(e) =
+                    mqtt_client.subscribe(&mqtt_control_topic_device, QoS::AtLeastOnce)
+                {
+                    log::warn!("⚠️  Failed to subscribe to device control topic: {:?}", e);
+                } else {
+                    log::info!("  ✅ Subscribed to: {}", mqtt_control_topic_device);
+                }
+
+                // Set up MQTT message handler for LED control
+                let led_for_mqtt = led_manager.clone();
+                mqtt_client.set_message_callback(move |topic, payload| {
+                    log::info!("📨 MQTT message received on {}: {}", topic, payload);
+
+                    // Parse JSON payload for LED control
+                    // Expected format: {"duration_ms": 500, "period_ms": 5000}
+                    // Or simple commands: "on", "off", "blink"
+                    match payload.as_str() {
+                        "on" => {
+                            log::info!("💡 MQTT command: Turn LED ON");
+                            led_for_mqtt.turn_on();
+                        }
+                        "off" => {
+                            log::info!("💡 MQTT command: Turn LED OFF");
+                            led_for_mqtt.turn_off();
+                        }
+                        _ => {
+                            // Try to parse as JSON
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
+                                if let (Some(duration), Some(period)) = (
+                                    json.get("duration_ms").and_then(|v| v.as_u64()),
+                                    json.get("period_ms").and_then(|v| v.as_u64()),
+                                ) {
+                                    let duration_ms = duration as u32;
+                                    let period_ms = period as u32;
+
+                                    log::info!(
+                                        "💡 MQTT command: Set pulse {}ms / {}ms",
+                                        duration_ms,
+                                        period_ms
+                                    );
+
+                                    match PulseConfig::new(duration_ms, period_ms) {
+                                        Ok(config) => {
+                                            led_for_mqtt.set_pulse(config);
+                                        }
+                                        Err(e) => {
+                                            log::warn!("⚠️  Invalid pulse config: {}", e);
+                                        }
+                                    }
+                                } else {
+                                    log::warn!("⚠️  Invalid JSON format - expected duration_ms and period_ms");
+                                }
+                            } else {
+                                log::warn!("⚠️  Unknown MQTT command: {}", payload);
+                            }
+                        }
+                    }
+                });
+
+                // Publish initial status
+                let status = format!(
+                    r#"{{"state":"pulsing","duration_ms":500,"period_ms":5000,"device_id":"{}"}}"#,
+                    chip_id
+                );
+                if let Err(e) = mqtt_client.publish(
+                    &mqtt_status_topic_device,
+                    status.as_bytes(),
+                    QoS::AtLeastOnce,
+                    false,
+                ) {
+                    log::warn!("⚠️  Failed to publish initial status: {:?}", e);
+                } else {
+                    log::info!("📤 Published initial LED status");
+                }
+
+                Some(Arc::new(mqtt_client))
+            }
+            Err(e) => {
+                log::error!("❌ MQTT connection failed: {:?}", e);
+                log::warn!("⚠️  Continuing without MQTT - LED control will be CLI-only");
+                None
+            }
+        }
+    } else {
+        log::info!("⏭️  MQTT not initialized (WiFi not available)");
+        None
+    };
+
+    // Initialize UART0 for CLI (USB-C on most ESP32 boards)
+    log::info!("📟 Initializing UART0 for CLI...");
+    let uart_config = UartConfig::default().baudrate(esp_idf_hal::units::Hertz(115200));
+    let uart = UartDriver::new(
         peripherals.uart0,
-        peripherals.pins.gpio1, // TX (U0TXD)
-        peripherals.pins.gpio3, // RX (U0RXD)
+        peripherals.pins.gpio1,  // TX
+        peripherals.pins.gpio3,  // RX
         Option::<esp_idf_hal::gpio::Gpio0>::None,
         Option::<esp_idf_hal::gpio::Gpio0>::None,
         &uart_config,
     )?;
 
-    // Split UART into tx and rx drivers
-    let (uart_tx, uart_rx) = uart.split();
+    log::info!("✅ UART0 initialized at 115200 baud");
 
-    log::info!("✅ UART0 initialized (115200 baud)");
+    // Create terminal and command handler
+    let mut terminal = Terminal::new(uart);
+    let mut command_handler = CommandHandler::new().with_led(led_manager.clone());
 
-    // Initialize GPIO pins for MTU
-    // Using GPIO4 for clock output and GPIO5 for data input
-    log::info!("Initializing MTU GPIO pins...");
-    log::info!("  Clock pin: GPIO4 (output, starting LOW - no power to meter)");
-    log::info!("  Data pin:  GPIO5 (input)");
-
-    // Initialize clock pin LOW to simulate no power to meter at startup
-    let mut clock_pin = PinDriver::output(peripherals.pins.gpio4)?;
-    clock_pin.set_low()?;
-    log::info!("✅ Clock pin initialized LOW");
-
-    let data_pin = PinDriver::input(peripherals.pins.gpio5)?;
-
-    // SAFETY: We need 'static lifetime for pins to move into background thread
-    // The pins will be owned by the MTU thread for the entire program lifetime
-    let clock_pin_static: PinDriver<'static, esp_idf_hal::gpio::Gpio4, Output> =
-        unsafe { core::mem::transmute(clock_pin) };
-    let data_pin_static: PinDriver<'static, esp_idf_hal::gpio::Gpio5, Input> =
-        unsafe { core::mem::transmute(data_pin) };
-
-    // Get timer peripheral for MTU
-    let timer = peripherals.timer00;
-
-    // Create MTU instance with default config
-    let config = MtuConfig::default();
-    let mtu = Arc::new(GpioMtuTimerV2::new(config));
-
-    log::info!("✅ MTU GPIO pins configured");
-    log::info!("✅ MTU instance created with {} baud", mtu.get_baud_rate());
-
-    // Spawn MTU background thread and get command sender
-    let mtu_cmd_sender = GpioMtuTimerV2::spawn_mtu_thread(
-        Arc::clone(&mtu),
-        clock_pin_static,
-        data_pin_static,
-        timer,
-    );
-
-    log::info!("✅ MTU background thread spawned");
-
-    // Initialize LED manager on GPIO2 (built-in LED on most ESP32 boards)
-    log::info!("💡 Initializing status LED on GPIO2...");
-    let led_pin = PinDriver::output(peripherals.pins.gpio2)?;
-    let led_pin_static: PinDriver<'static, esp_idf_hal::gpio::Gpio2, Output> =
-        unsafe { core::mem::transmute(led_pin) };
-    let led_manager = Arc::new(esp32_water_meter::LedManager::new(led_pin_static));
-    log::info!("✅ Status LED initialized (GPIO2)");
-
-    // MQTT will be created on-demand when publishing data
-    log::info!("📡 MQTT: On-demand mode (will connect only when publishing)");
-
-    // Initialize CLI components
-    let mut terminal = Terminal::new(uart_tx, uart_rx);
-    let mut command_handler = CommandHandler::new()
-        .with_mtu(Arc::clone(&mtu), mtu_cmd_sender.clone())
-        .with_led(Arc::clone(&led_manager));
-
-    // Add WiFi to command handler if available
-    if let Some(ref wifi_manager) = wifi {
-        command_handler = command_handler.with_wifi(Arc::clone(wifi_manager));
+    if let Some(wifi_ref) = &wifi {
+        command_handler = command_handler.with_wifi(wifi_ref.clone());
+    }
+    if let Some(mqtt_ref) = &mqtt {
+        command_handler = command_handler.with_mqtt(mqtt_ref.clone());
     }
 
-    log::info!("✅ CLI initialized");
-
-    // Send welcome message
+    // Display welcome banner
+    terminal.write_line("\r\n")?;
+    terminal.write_line("╔═══════════════════════════════════════════════════════╗")?;
+    terminal.write_line("║       ESP32 LED Flasher with WiFi/MQTT Control       ║")?;
+    terminal.write_line("╚═══════════════════════════════════════════════════════╝")?;
+    terminal.write_line(&format!("  Chip ID: {}", chip_id))?;
+    terminal.write_line("  Default pulse: 500ms ON / 5s period")?;
     terminal.write_line("")?;
-    terminal.write_line("ESP32 Water Meter MTU Interface")?;
-    terminal.write_line("Type 'help' for available commands")?;
-    terminal.write_line("Use TAB for command autocompletion")?;
-    terminal.write_line("MTU Clock: GPIO4 | Data: GPIO5")?;
 
-    // Show WiFi/MQTT status in welcome message
     if wifi.is_some() {
-        terminal.write_line("WiFi: On-demand (disconnected)")?;
-        terminal.write_line("MQTT: On-demand (will connect after MTU read)")?;
+        terminal.write_line("  WiFi: ✅ Connected")?;
+    } else {
+        terminal.write_line("  WiFi: ❌ Not connected")?;
     }
-    terminal.print_prompt()?;
 
-    log::info!("Entering CLI loop...");
+    if mqtt.is_some() {
+        terminal.write_line("  MQTT: ✅ Connected")?;
+        terminal.write_line(&format!("  Control topics:"))?;
+        terminal.write_line(&format!("    {}", mqtt_control_topic_device))?;
+        terminal.write_line(&format!("    {}", MQTT_CONTROL_TOPIC_SHARED))?;
+    } else {
+        terminal.write_line("  MQTT: ❌ Not connected")?;
+    }
 
-    // Helper function to publish MTU data with on-demand WiFi/MQTT connection
-    // This function connects WiFi, creates MQTT client, publishes data,
-    // waits for downlink messages, then disconnects everything
-    let publish_with_connectivity = |wifi_manager: &Arc<Mutex<WifiManager>>,
-                                     mtu_sender: &std::sync::mpsc::Sender<MtuCommand>,
-                                     led: &Arc<esp32_water_meter::LedManager>,
-                                     message: &str,
-                                     stats: (u32, u32, usize),
-                                     baud_rate: u32,
-                                     counter: &mut u32,
-                                     control_shared: &str,
-                                     control_device: &str,
-                                     client_id: &str| {
-        let (successful, corrupted, cycles) = stats;
-
-        // Set LED to slow blink for WiFi/MQTT operations
-        led.set_status(esp32_water_meter::LedStatus::SlowBlink);
-
-        log::info!("📡 On-demand publish: Connecting WiFi...");
-
-        // Step 1: Connect WiFi
-        let wifi_result = if let Ok(mut wifi_guard) = wifi_manager.lock() {
-            wifi_guard.reconnect(None, None)
-        } else {
-            log::error!("❌ Failed to lock WiFi manager");
-            return;
-        };
-
-        if let Err(e) = wifi_result {
-            log::error!("❌ WiFi connection failed: {:?}", e);
-            return;
-        }
-
-        log::info!("✅ WiFi connected");
-
-        // Step 2: Synchronize time with NTP server
-        log::info!("🕒 Synchronizing time with NTP server...");
-        let sync = Arc::new((Mutex::new(false), Condvar::new()));
-        let sntp = {
-            let sync = sync.clone();
-            sntp::EspSntp::new_with_callback(&sntp::SntpConf::default(), move |_| {
-                let (lock, cvar) = &*sync;
-                let mut guard = lock.lock().unwrap();
-                *guard = true;
-                cvar.notify_one();
-            })
-            .unwrap()
-        };
-
-        // Wait for sync with 10-second timeout
-        let (lock, cvar) = &*sync;
-        let mut guard = lock.lock().unwrap();
-        let mut synced = *guard;
-
-        if !synced {
-            let (new_guard, timeout_result) =
-                cvar.wait_timeout(guard, Duration::from_secs(10)).unwrap();
-            guard = new_guard;
-            synced = *guard && !timeout_result.timed_out();
-        }
-
-        if synced {
-            log::info!("✅ Time synchronized with NTP");
-        } else {
-            log::warn!("⚠️  Time synchronization timed out (continuing anyway)");
-        }
-        drop(guard);
-        drop(sntp);
-
-        // Step 3: Create MQTT client with message handler for control topic
-        log::info!("📡 Creating MQTT client...");
-
-        // Clone MTU sender for MQTT callback
-        let mqtt_mtu_sender = mtu_sender.clone();
-
-        // Clone control topics for callback
-        let callback_control_shared = control_shared.to_string();
-        let callback_control_device = control_device.to_string();
-
-        let mqtt_client = match MqttClient::new(
-            MQTT_BROKER,
-            client_id,
-            Arc::new(move |topic, data| {
-                if let Ok(msg) = std::str::from_utf8(data) {
-                    log::info!("📩 MQTT control message on {}: {}", topic, msg);
-
-                    // Accept commands from both shared and device-specific topics
-                    if topic == callback_control_shared || topic == callback_control_device {
-                        // Try to parse as JSON first
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(msg) {
-                            // Handle JSON messages like {"baud_rate": 1200}
-                            if let Some(baud_rate) = json.get("baud_rate").and_then(|v| v.as_u64())
-                            {
-                                log::info!("MQTT: Setting baud rate to {} bps", baud_rate);
-                                let _ = mqtt_mtu_sender.send(MtuCommand::SetBaudRate {
-                                    baud_rate: baud_rate as u32,
-                                });
-                            }
-                            if let Some(cmd) = json.get("command").and_then(|v| v.as_str()) {
-                                match cmd {
-                                    "start" => {
-                                        let duration = json
-                                            .get("duration")
-                                            .and_then(|v| v.as_u64())
-                                            .unwrap_or(30);
-                                        log::info!("MQTT: Starting MTU for {}s", duration);
-                                        let _ = mqtt_mtu_sender.send(MtuCommand::Start {
-                                            duration_secs: duration,
-                                        });
-                                    }
-                                    "stop" => {
-                                        log::info!("MQTT: Stopping MTU");
-                                        let _ = mqtt_mtu_sender.send(MtuCommand::Stop);
-                                    }
-                                    _ => {
-                                        log::warn!("MQTT: Unknown JSON command: {}", cmd);
-                                    }
-                                }
-                            }
-                        } else {
-                            // Fall back to plain text commands for backwards compatibility
-                            let cmd = msg.trim().to_lowercase();
-                            match cmd.as_str() {
-                                "start" => {
-                                    log::info!("MQTT: Starting MTU (30s default)");
-                                    let _ = mqtt_mtu_sender
-                                        .send(MtuCommand::Start { duration_secs: 30 });
-                                }
-                                msg if msg.starts_with("start ") => {
-                                    if let Some(duration_str) = msg.strip_prefix("start ") {
-                                        if let Ok(duration) = duration_str.parse::<u64>() {
-                                            log::info!("MQTT: Starting MTU for {}s", duration);
-                                            let _ = mqtt_mtu_sender.send(MtuCommand::Start {
-                                                duration_secs: duration,
-                                            });
-                                        }
-                                    }
-                                }
-                                "stop" => {
-                                    log::info!("MQTT: Stopping MTU");
-                                    let _ = mqtt_mtu_sender.send(MtuCommand::Stop);
-                                }
-                                _ => {
-                                    log::warn!("MQTT: Unknown control command: {}", cmd);
-                                }
-                            }
-                        }
-                    }
-                }
-            }),
-        ) {
-            Ok(client) => client,
-            Err(e) => {
-                log::error!("❌ MQTT client creation failed: {:?}", e);
-                // Disconnect WiFi before returning
-                if let Ok(mut wifi_guard) = wifi_manager.lock() {
-                    let _ = wifi_guard.disconnect();
-                }
-                return;
-            }
-        };
-
-        // Step 4: Wait for MQTT connection (up to 10 seconds)
-        log::info!("⏳ Waiting for MQTT connection...");
-        for i in 0..20 {
-            if mqtt_client.is_connected() {
-                log::info!("✅ MQTT connected");
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            if i == 19 {
-                log::error!("❌ MQTT connection timeout");
-                // Disconnect WiFi and return
-                if let Ok(mut wifi_guard) = wifi_manager.lock() {
-                    let _ = wifi_guard.disconnect();
-                }
-                return;
-            }
-        }
-
-        // Step 5: Subscribe to control topics (both shared and device-specific)
-        log::info!("📥 Subscribing to shared control topic: {}", control_shared);
-        if let Err(e) = mqtt_client.subscribe(control_shared, QoS::AtLeastOnce) {
-            log::warn!("⚠️  Failed to subscribe to shared control topic: {:?}", e);
-        }
-
-        log::info!("📥 Subscribing to device control topic: {}", control_device);
-        if let Err(e) = mqtt_client.subscribe(control_device, QoS::AtLeastOnce) {
-            log::warn!("⚠️  Failed to subscribe to device control topic: {:?}", e);
-        }
-
-        // Step 6: Get timestamp
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let timestamp_str =
-            chrono::DateTime::from_timestamp(now.as_secs() as i64, now.subsec_nanos())
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_else(|| "<unknown>".to_string());
-
-        // Step 7: Publish MTU data with device identification and timestamp
-        let chip_id = get_chip_id();
-        let (wifi_mac, wifi_ip) = if let Ok(wifi_guard) = wifi_manager.lock() {
-            let mac = wifi_guard
-                .get_mac()
-                .unwrap_or_else(|_| "unknown".to_string());
-            let ip = wifi_guard
-                .get_ip()
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
-            (mac, ip)
-        } else {
-            ("unknown".to_string(), "unknown".to_string())
-        };
-
-        let payload = serde_json::json!({
-            "timestamp": timestamp_str,
-            "chip_id": chip_id,
-            "wifi_mac": wifi_mac,
-            "wifi_ip": wifi_ip,
-            "message": message,
-            "baud_rate": baud_rate,
-            "cycles": cycles,
-            "successful": successful,
-            "corrupted": corrupted,
-            "count": *counter,
-        });
-
-        if let Ok(json_str) = serde_json::to_string(&payload) {
-            match mqtt_client.publish(
-                MQTT_PUBLISH_TOPIC,
-                json_str.as_bytes(),
-                QoS::AtLeastOnce,
-                false,
-            ) {
-                Ok(_) => {
-                    *counter += 1;
-                    log::info!(
-                        "📤 Published #{} to {}: {}",
-                        *counter,
-                        MQTT_PUBLISH_TOPIC,
-                        message
-                    );
-                }
-                Err(e) => {
-                    log::error!("❌ MQTT publish failed: {:?}", e);
-                }
-            }
-        }
-
-        // Step 8: Wait 5 seconds for queued downlink messages
-        log::info!("⏳ Waiting 5s for queued downlink messages...");
-        std::thread::sleep(std::time::Duration::from_secs(5));
-
-        // Step 9: Signal MQTT connection handler to shutdown (prevents errors/retries)
-        mqtt_client.shutdown();
-
-        // Drop the client (connection handler already exited cleanly)
-        drop(mqtt_client);
-
-        // Step 10: Disconnect WiFi
-        log::info!("🔌 Disconnecting WiFi...");
-        if let Ok(mut wifi_guard) = wifi_manager.lock() {
-            if let Err(e) = wifi_guard.disconnect() {
-                log::warn!("⚠️  WiFi disconnect failed: {:?}", e);
-            }
-        }
-
-        log::info!("✅ On-demand publish cycle complete");
-
-        // Set LED back to idle (off)
-        led.set_status(esp32_water_meter::LedStatus::Off);
-    };
-
-    // Track last published cycle count for on-demand publishing
-    // Publish based on MTU read cycles, not message content (allows duplicate messages)
-    let mut last_published_cycles = 0u64;
-    let mut publish_counter = 0u32;
+    terminal.write_line("")?;
+    terminal.write_line("Type 'help' for available commands")?;
+    terminal.write_line("")?;
 
     // Main CLI loop
+    log::info!("🚀 Entering main CLI loop");
+
+    // Spawn background task for periodic MQTT status publishing
+    if let (Some(mqtt_ref), Some(_wifi_ref)) = (mqtt.clone(), wifi.clone()) {
+        let led_for_status = led_manager.clone();
+        let status_topic = mqtt_status_topic_device.clone();
+        let chip_id_for_status = chip_id.clone();
+
+        std::thread::Builder::new()
+            .stack_size(8192)
+            .name("mqtt_status".to_string())
+            .spawn(move || {
+                log::info!("📊 MQTT status publisher started (every 60s)");
+                loop {
+                    FreeRtos::delay_ms(60_000); // Publish every 60 seconds
+
+                    let status = led_for_status.get_status();
+                    let status_json = match status {
+                        esp32_led_flasher::led::LedStatus::Off => {
+                            format!(
+                                r#"{{"state":"off","device_id":"{}"}}"#,
+                                chip_id_for_status
+                            )
+                        }
+                        esp32_led_flasher::led::LedStatus::SolidOn => {
+                            format!(
+                                r#"{{"state":"on","device_id":"{}"}}"#,
+                                chip_id_for_status
+                            )
+                        }
+                        esp32_led_flasher::led::LedStatus::CustomPulse(config) => {
+                            format!(
+                                r#"{{"state":"pulsing","duration_ms":{},"period_ms":{},"device_id":"{}"}}"#,
+                                config.duration_ms, config.period_ms, chip_id_for_status
+                            )
+                        }
+                        esp32_led_flasher::led::LedStatus::SlowBlink => {
+                            format!(
+                                r#"{{"state":"blink","frequency_hz":1,"device_id":"{}"}}"#,
+                                chip_id_for_status
+                            )
+                        }
+                        esp32_led_flasher::led::LedStatus::FastBlink => {
+                            format!(
+                                r#"{{"state":"blink","frequency_hz":5,"device_id":"{}"}}"#,
+                                chip_id_for_status
+                            )
+                        }
+                    };
+
+                    if let Err(e) = mqtt_ref.publish(
+                        &status_topic,
+                        status_json.as_bytes(),
+                        QoS::AtMostOnce,
+                        false,
+                    ) {
+                        log::warn!("⚠️  Failed to publish status: {:?}", e);
+                    } else {
+                        log::debug!("📤 Published LED status");
+                    }
+                }
+            })
+            .expect("Failed to spawn MQTT status publisher");
+    }
+
     loop {
-        // On-demand publish: Connect WiFi/MQTT only when new MTU data is available
-        if let Some(wifi_manager) = &wifi {
-            if let Some(current_message) = mtu.get_last_message() {
-                // Get statistics for the JSON payload
-                let (successful, corrupted, cycles) = mtu.get_stats();
-
-                // Publish if we have a new MTU read cycle (successful or corrupted count increased)
-                let total_reads = successful + corrupted;
-                let should_publish = u64::from(total_reads) > last_published_cycles;
-
-                if should_publish {
-                    let baud_rate = mtu.get_baud_rate();
-
-                    // Call on-demand publish function
-                    // This will: connect WiFi → create MQTT → publish → wait for downlink → disconnect
-                    publish_with_connectivity(
-                        wifi_manager,
-                        &mtu_cmd_sender,
-                        &led_manager,
-                        current_message.as_str(),
-                        (successful, corrupted, cycles),
-                        baud_rate,
-                        &mut publish_counter,
-                        MQTT_CONTROL_TOPIC_SHARED,
-                        &mqtt_control_topic_device,
-                        &mqtt_client_id,
-                    );
-
-                    // Update last published cycle count
-                    last_published_cycles = u64::from(total_reads);
+        if let Ok(command) = terminal.read_command(&mut command_handler) {
+            match command_handler.execute_command(command) {
+                Ok(response) => {
+                    if !response.is_empty() {
+                        let _ = terminal.write_line(&response);
+                    }
+                }
+                Err(e) => {
+                    let _ = terminal.write_line(&format!("Error: {}", e));
                 }
             }
         }
 
-        // Read character with non-blocking timeout
-        match terminal.read_char() {
-            Ok(Some(ch)) => {
-                // Handle character and check if we got a complete command
-                match terminal.handle_char(ch) {
-                    Ok(Some(command_line)) => {
-                        // Parse and execute the command
-                        let command = CommandParser::parse_command(&command_line);
-
-                        // Clone command for later pattern matching
-                        let command_clone = command.clone();
-
-                        match command_handler.execute_command(command) {
-                            Ok(response) => {
-                                if !response.is_empty() {
-                                    let _ = terminal.write_line(&response);
-                                }
-                            }
-                            Err(_) => {
-                                log::warn!("CLI command execution error");
-                                let _ = terminal.write_line("Command execution error.");
-                            }
-                        }
-
-                        // Handle special commands that need terminal interaction
-                        match command_clone {
-                            esp32_water_meter::cli::CliCommand::Help => {
-                                let _ = terminal.show_help();
-                            }
-                            esp32_water_meter::cli::CliCommand::Clear => {
-                                let _ = terminal.clear_screen();
-                            }
-                            _ => {}
-                        }
-
-                        let _ = terminal.print_prompt();
-                    }
-                    Ok(None) => {
-                        // Character processed but no complete command yet
-                    }
-                    Err(_) => {
-                        log::warn!("Terminal input error");
-                        let _ = terminal.write_line("Input error");
-                        let _ = terminal.print_prompt();
-                    }
-                }
-            }
-            Ok(None) => {
-                // No data available, small delay to avoid busy loop
-                FreeRtos::delay_ms(10);
-            }
-            Err(_) => {
-                // UART error, small delay
-                FreeRtos::delay_ms(10);
-            }
-        }
+        // Small delay to prevent busy loop
+        FreeRtos::delay_ms(10);
     }
 }

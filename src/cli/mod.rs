@@ -2,17 +2,9 @@ pub mod commands;
 pub mod parser;
 pub mod terminal;
 
-// Meter CLI modules
-pub mod meter_commands;
-pub mod meter_parser;
-
 pub use commands::CommandHandler;
 pub use parser::CommandParser;
 pub use terminal::Terminal;
-
-// Meter CLI exports
-pub use meter_commands::MeterCommandHandler;
-pub use meter_parser::{MeterCommand, MeterCommandParser};
 
 // CLI-related types and constants
 pub const CLI_BUFFER_SIZE: usize = 128;
@@ -20,6 +12,7 @@ pub const MAX_HISTORY_SIZE: usize = 10;
 
 #[derive(Debug, Clone)]
 pub enum CliCommand {
+    // System commands
     Help,
     Version,
     Status,
@@ -27,19 +20,21 @@ pub enum CliCommand {
     Clear,
     Reset,
     Echo(String),
-    MtuStart(Option<u16>), // Optional duration in seconds
-    MtuStop,
-    MtuStatus,
-    MtuBaud(u32),                                // Set MTU baud rate
-    MtuFormat(String), // Set MTU UART format (7E1, 7E2, 8N1, 8E1, 7O1, 8N2)
-    MtuReset,          // Reset MTU statistics
+    // LED commands
+    LedOn,
+    LedOff,
+    LedPulse(u32, u32),  // duration_ms, period_ms
+    LedStatus,
+    LedBlink(u32),       // frequency_hz
+    // WiFi commands
     WifiConnect(Option<String>, Option<String>), // ssid, password (None = use default)
     WifiStatus,
     WifiReconnect,       // Reconnect using stored credentials
     WifiScan,            // Scan for available WiFi networks
-    MqttConnect(String), // broker_url
+    // MQTT commands
     MqttStatus,
     MqttPublish(String, String), // topic, message
+    // Other
     Empty,
     Unknown(String),
 }
