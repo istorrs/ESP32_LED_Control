@@ -23,7 +23,7 @@ pub enum CliCommand {
     // LED commands
     LedOn,
     LedOff,
-    LedPulse(u32, u32),  // duration_ms, period_ms
+    LedPulse(u32, u32, u8),  // duration_ms, period_ms, brightness_percent
     LedStatus,
     LedBlink(u32),       // frequency_hz
     // WiFi commands
@@ -34,9 +34,12 @@ pub enum CliCommand {
     // MQTT commands
     MqttStatus,
     MqttPublish(String, String), // topic, message
+    MqttEnable,
+    MqttDisable,
     // Other
     Empty,
-    Unknown(String),
+    InvalidSyntax(String), // Invalid parameters/syntax for a known command
+    Unknown(String),        // Completely unknown command
 }
 
 #[derive(Debug)]

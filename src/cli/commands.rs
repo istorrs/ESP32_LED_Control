@@ -10,6 +10,9 @@ pub struct CommandHandler {
     wifi: Option<Arc<Mutex<WifiManager>>>,
     mqtt: Option<Arc<MqttClient>>,
     led: Option<Arc<LedManager>>,
+    event_config_topic: Option<String>,
+    event_error_topic: Option<String>,
+    mqtt_publishing_enabled: bool,
 }
 
 impl Default for CommandHandler {
@@ -25,6 +28,20 @@ impl CommandHandler {
             wifi: None,
             mqtt: None,
             led: None,
+            event_config_topic: None,
+            event_error_topic: None,
+            mqtt_publishing_enabled: false, // Default to disabled
+        }
+    }
+
+    /// Format microseconds duration as human-readable string
+    fn format_duration(microseconds: u32) -> String {
+        if microseconds >= 1_000_000 {
+            format!("{:.1}s", microseconds as f32 / 1_000_000.0)
+        } else if microseconds >= 1_000 {
+            format!("{}ms", microseconds / 1_000)
+        } else {
+            format!("{}μs", microseconds)
         }
     }
 
@@ -43,6 +60,12 @@ impl CommandHandler {
         self
     }
 
+    pub fn with_event_topics(mut self, config_topic: String, error_topic: String) -> Self {
+        self.event_config_topic = Some(config_topic);
+        self.event_error_topic = Some(error_topic);
+        self
+    }
+
     pub fn execute_command(&mut self, command: CliCommand) -> Result<String, CliError> {
         let mut response = String::new();
 
@@ -51,8 +74,34 @@ impl CommandHandler {
                 // Empty command - just return empty response (no error)
             }
             CliCommand::Help => {
-                // Help is handled in terminal.rs
-                response.push_str("Help displayed");
+                log::info!("CLI: Help requested");
+                response.push_str("Available commands:\r\n");
+                response.push_str("  help        - Show this help\r\n");
+                response.push_str("  version     - Show firmware version\r\n");
+                response.push_str("  status      - Show system status\r\n");
+                response.push_str("  uptime      - Show system uptime\r\n");
+                response.push_str("  clear       - Clear terminal\r\n");
+                response.push_str("  reset       - Reset system\r\n");
+                response.push_str("  echo <text> - Echo text back\r\n");
+                response.push_str("  led_on      - Turn LED on (solid)\r\n");
+                response.push_str("  led_off     - Turn LED off\r\n");
+                response.push_str("  led_pulse <duration> <period> [brightness_%] - Set custom pulse\r\n");
+                response.push_str("              Supports us/ms/s units (e.g., 500us 5ms, 10ms 1s)\r\n");
+                response.push_str("              Range: 100us-2s duration, 500us-1h period\r\n");
+                response.push_str("  led_status  - Show LED status and configuration\r\n");
+                response.push_str("  led_blink <hz> - Set blink frequency (1-10 Hz)\r\n");
+                response.push_str("  wifi_connect [ssid] [password] - Connect to WiFi (no args = default)\r\n");
+                response.push_str("  wifi_reconnect - Quick reconnect to default WiFi\r\n");
+                response.push_str("  wifi_status - Show WiFi connection status\r\n");
+                response.push_str("  wifi_scan   - Scan for available WiFi networks\r\n");
+                response.push_str("  mqtt_status - Show MQTT connection status\r\n");
+                response.push_str("  mqtt_enable - Enable MQTT publishing from CLI commands\r\n");
+                response.push_str("  mqtt_disable - Disable MQTT publishing from CLI commands\r\n");
+                response.push_str("  mqtt_publish <topic> <message> - Publish MQTT message\r\n");
+                response.push_str("\r\n");
+                response.push_str("Use TAB to autocomplete commands\r\n");
+                response.push_str("Use UP/DOWN arrows to navigate command history\r\n");
+                response.push_str("Use LEFT/RIGHT arrows to move cursor and edit");
             }
             CliCommand::Version => {
                 log::info!("CLI: Version requested");
@@ -106,6 +155,22 @@ impl CommandHandler {
                 if let Some(ref led) = self.led {
                     led.turn_on();
                     response.push_str("LED turned ON");
+
+                    // Publish config change event to MQTT (if enabled)
+                    if self.mqtt_publishing_enabled {
+                        if let Some(ref mqtt) = self.mqtt {
+                            let config_json = format!(
+                                r#"{{"timestamp":{},"source":"cli","event":"config_changed","config":{{"state":"on"}}}}"#,
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()
+                            );
+                            if let Some(ref topic) = self.event_config_topic {
+                                let _ = mqtt.publish(topic, config_json.as_bytes(), esp_idf_svc::mqtt::client::QoS::AtMostOnce, false);
+                            }
+                        }
+                    }
                 } else {
                     response.push_str("LED not initialized");
                 }
@@ -115,24 +180,63 @@ impl CommandHandler {
                 if let Some(ref led) = self.led {
                     led.turn_off();
                     response.push_str("LED turned OFF");
+
+                    // Publish config change event to MQTT (if enabled)
+                    if self.mqtt_publishing_enabled {
+                        if let Some(ref mqtt) = self.mqtt {
+                            let config_json = format!(
+                                r#"{{"timestamp":{},"source":"cli","event":"config_changed","config":{{"state":"off"}}}}"#,
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()
+                            );
+                            if let Some(ref topic) = self.event_config_topic {
+                                let _ = mqtt.publish(topic, config_json.as_bytes(), esp_idf_svc::mqtt::client::QoS::AtMostOnce, false);
+                            }
+                        }
+                    }
                 } else {
                     response.push_str("LED not initialized");
                 }
             }
-            CliCommand::LedPulse(duration_ms, period_ms) => {
+            CliCommand::LedPulse(duration_us, period_us, brightness_percent) => {
                 log::info!(
-                    "CLI: LED pulse requested - duration: {}ms, period: {}ms",
-                    duration_ms,
-                    period_ms
+                    "CLI: LED pulse requested - duration: {}μs, period: {}μs, brightness: {}%",
+                    duration_us,
+                    period_us,
+                    brightness_percent
                 );
                 if let Some(ref led) = self.led {
-                    match PulseConfig::new(duration_ms, period_ms) {
+                    match PulseConfig::new(duration_us, period_us, brightness_percent) {
                         Ok(config) => {
                             led.set_pulse(config);
                             response.push_str(&format!(
-                                "LED pulse set: {}ms ON / {}ms period",
-                                duration_ms, period_ms
+                                "LED pulse set: {} ON @ {}% / {} period",
+                                Self::format_duration(duration_us),
+                                brightness_percent,
+                                Self::format_duration(period_us)
                             ));
+
+                            // Publish config change event to MQTT (if enabled)
+                            if self.mqtt_publishing_enabled {
+                                if let Some(ref mqtt) = self.mqtt {
+                                    let config_json = format!(
+                                        r#"{{"timestamp":{},"source":"cli","event":"config_changed","config":{{"state":"pulsing","duration_us":{},"period_us":{},"brightness_percent":{}}}}}"#,
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs(),
+                                        duration_us,
+                                        period_us,
+                                        brightness_percent
+                                    );
+
+                                    if let Some(ref topic) = self.event_config_topic {
+                                        let _ = mqtt.publish(topic, config_json.as_bytes(), esp_idf_svc::mqtt::client::QoS::AtMostOnce, false);
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             response.push_str(&format!("Invalid pulse configuration: {}", e));
@@ -146,6 +250,8 @@ impl CommandHandler {
                 log::info!("CLI: LED status requested");
                 if let Some(ref led) = self.led {
                     let status = led.get_status();
+                    let stats = led.get_statistics();
+
                     response.push_str("LED Status:\r\n");
                     match status {
                         LedStatus::Off => {
@@ -156,11 +262,13 @@ impl CommandHandler {
                         }
                         LedStatus::CustomPulse(config) => {
                             response.push_str(&format!(
-                                "  State: Pulsing\r\n  Duration: {}ms\r\n  Period: {}ms",
-                                config.duration_ms, config.period_ms
+                                "  State: Pulsing\r\n  Duration: {}\r\n  Period: {}\r\n  Brightness: {}%",
+                                Self::format_duration(config.duration_us),
+                                Self::format_duration(config.period_us),
+                                config.brightness_percent
                             ));
                             let duty_cycle =
-                                (config.duration_ms as f32 / config.period_ms as f32) * 100.0;
+                                (config.duration_us as f32 / config.period_us as f32) * 100.0;
                             response.push_str(&format!("\r\n  Duty cycle: {:.1}%", duty_cycle));
                         }
                         LedStatus::SlowBlink => {
@@ -168,6 +276,74 @@ impl CommandHandler {
                         }
                         LedStatus::FastBlink => {
                             response.push_str("  State: Fast blink (5 Hz)");
+                        }
+                    }
+
+                    // Add statistics
+                    let elapsed_secs = stats.config_changed_time.elapsed().as_secs_f32();
+                    response.push_str(&format!("\r\n\r\nStatistics:\r\n  Pulses since config change: {}", stats.pulse_count));
+                    response.push_str(&format!("\r\n  Config changed: {:.1}s ago", elapsed_secs));
+
+                    // Calculate actual pulse rate from ISR timestamps
+                    // Use time between first and last pulse for accuracy
+                    if stats.pulse_count > 1 {
+                        if let (Some(first), Some(last)) = (stats.first_pulse_time, stats.last_pulse_time) {
+                            let measurement_duration = last.duration_since(first).as_secs_f32();
+                            if measurement_duration > 0.0 {
+                                // Rate = (pulses - 1) / time_elapsed
+                                // We subtract 1 because we're measuring intervals between pulses
+                                let actual_rate = (stats.pulse_count - 1) as f32 / measurement_duration;
+                                response.push_str(&format!("\r\n  Measured pulse rate: {:.4} Hz", actual_rate));
+                                response.push_str(&format!("\r\n  Measurement period: {:.2}s ({} pulses)", measurement_duration, stats.pulse_count));
+
+                                // Compare to expected rate based on period
+                                if let LedStatus::CustomPulse(config) = status {
+                                    let expected_rate = 1_000_000.0 / config.period_us as f32;
+                                    response.push_str(&format!("\r\n  Expected pulse rate: {:.4} Hz", expected_rate));
+                                    let error_percent = ((actual_rate - expected_rate) / expected_rate) * 100.0;
+                                    response.push_str(&format!("\r\n  Timing accuracy: {:.3}%", error_percent));
+                                } else if let LedStatus::SlowBlink = status {
+                                    response.push_str(&format!("\r\n  Expected pulse rate: 1.0000 Hz"));
+                                    let error_percent = ((actual_rate - 1.0) / 1.0) * 100.0;
+                                    response.push_str(&format!("\r\n  Timing accuracy: {:.3}%", error_percent));
+                                } else if let LedStatus::FastBlink = status {
+                                    response.push_str(&format!("\r\n  Expected pulse rate: 5.0000 Hz"));
+                                    let error_percent = ((actual_rate - 5.0) / 5.0) * 100.0;
+                                    response.push_str(&format!("\r\n  Timing accuracy: {:.3}%", error_percent));
+                                }
+                            }
+                        }
+                    } else if stats.pulse_count == 1 {
+                        response.push_str(&format!("\r\n  (Need at least 2 pulses to measure rate)"));
+                    }
+
+                    if let Some(last_pulse) = stats.last_pulse_time {
+                        response.push_str(&format!("\r\n  Last pulse: {:.1}s ago", last_pulse.elapsed().as_secs_f32()));
+                    }
+
+                    // Duty cycle verification from ON/OFF time accumulation
+                    let total_measured_time_us = stats.total_on_time_us + stats.total_off_time_us;
+                    if total_measured_time_us > 0 {
+                        let measured_duty_cycle = (stats.total_on_time_us as f32 / total_measured_time_us as f32) * 100.0;
+                        response.push_str(&format!("\r\n\r\nDuty Cycle Verification:"));
+                        response.push_str(&format!("\r\n  Total ON time: {:.3}s", stats.total_on_time_us as f32 / 1_000_000.0));
+                        response.push_str(&format!("\r\n  Total OFF time: {:.3}s", stats.total_off_time_us as f32 / 1_000_000.0));
+                        response.push_str(&format!("\r\n  Measured duty cycle: {:.2}%", measured_duty_cycle));
+
+                        // Compare to expected duty cycle
+                        if let LedStatus::CustomPulse(config) = status {
+                            let expected_duty_cycle = (config.duration_us as f32 / config.period_us as f32) * 100.0;
+                            response.push_str(&format!("\r\n  Expected duty cycle: {:.2}%", expected_duty_cycle));
+                            let duty_error = ((measured_duty_cycle - expected_duty_cycle) / expected_duty_cycle) * 100.0;
+                            response.push_str(&format!("\r\n  Duty cycle accuracy: {:.3}%", duty_error));
+                        } else if let LedStatus::SlowBlink = status {
+                            response.push_str(&format!("\r\n  Expected duty cycle: 50.00%"));
+                            let duty_error = ((measured_duty_cycle - 50.0) / 50.0) * 100.0;
+                            response.push_str(&format!("\r\n  Duty cycle accuracy: {:.3}%", duty_error));
+                        } else if let LedStatus::FastBlink = status {
+                            response.push_str(&format!("\r\n  Expected duty cycle: 50.00%"));
+                            let duty_error = ((measured_duty_cycle - 50.0) / 50.0) * 100.0;
+                            response.push_str(&format!("\r\n  Duty cycle accuracy: {:.3}%", duty_error));
                         }
                     }
                 } else {
@@ -288,10 +464,11 @@ impl CommandHandler {
 
                                         // Format as table
                                         response.push_str(
-                                            "SSID                            | RSSI | Ch | Sec\r\n",
+                                            "SSID                            | RSSI | Ch\r\n",
                                         );
                                         response.push_str(
-                                            "--------------------------------|------|----|---------\r\n",
+                                            "--------------------------------|------|----|
+\r\n",
                                         );
 
                                         for ap in aps {
@@ -304,8 +481,8 @@ impl CommandHandler {
                                             };
 
                                             response.push_str(&format!(
-                                                "{:31} | {:4} | {:2} | {:?}\r\n",
-                                                ssid_padded, ap.signal_strength, ap.channel, ap.auth
+                                                "{:31} | {:4} | {:2}\r\n",
+                                                ssid_padded, ap.signal_strength, ap.channel
                                             ));
                                         }
                                     }
@@ -341,6 +518,14 @@ impl CommandHandler {
                     ));
                     response.push_str(&format!("  Broker: {}\r\n", status.broker_url));
                     response.push_str(&format!("  Client ID: {}\r\n", status.client_id));
+                    response.push_str(&format!(
+                        "  Publishing: {}\r\n",
+                        if self.mqtt_publishing_enabled {
+                            "✅ Enabled"
+                        } else {
+                            "❌ Disabled"
+                        }
+                    ));
 
                     let subs = status.subscriptions.lock().unwrap();
                     response.push_str(&format!("  Subscriptions ({}):\r\n", subs.len()));
@@ -386,11 +571,68 @@ impl CommandHandler {
                     response.push_str("MQTT not initialized");
                 }
             }
+            CliCommand::MqttEnable => {
+                log::info!("CLI: MQTT publishing enable requested");
+                if self.mqtt.is_some() {
+                    self.mqtt_publishing_enabled = true;
+                    response.push_str("MQTT publishing enabled");
+                } else {
+                    response.push_str("MQTT not initialized - cannot enable publishing");
+                }
+            }
+            CliCommand::MqttDisable => {
+                log::info!("CLI: MQTT publishing disable requested");
+                self.mqtt_publishing_enabled = false;
+                response.push_str("MQTT publishing disabled");
+            }
+            CliCommand::InvalidSyntax(msg) => {
+                log::info!("CLI: Invalid command syntax: {}", msg);
+
+                response.push_str("Invalid Command Syntax: ");
+                response.push_str(&msg);
+
+                // Publish error event to MQTT (if enabled)
+                if self.mqtt_publishing_enabled {
+                    if let Some(ref mqtt) = self.mqtt {
+                        let error_json = format!(
+                            r#"{{"timestamp":{},"source":"cli","event":"invalid_syntax","error":"{}"}}"#,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            msg.replace('"', "'")
+                        );
+
+                        if let Some(ref topic) = self.event_error_topic {
+                            let _ = mqtt.publish(topic, error_json.as_bytes(), esp_idf_svc::mqtt::client::QoS::AtMostOnce, false);
+                        }
+                    }
+                }
+            }
             CliCommand::Unknown(cmd) => {
                 log::info!("CLI: Unknown command: {}", cmd);
-                response.push_str("Unknown command: ");
+
+                response.push_str("Unknown Command: ");
                 response.push_str(&cmd);
                 response.push_str(". Type 'help' for available commands.");
+
+                // Publish error event to MQTT (if enabled)
+                if self.mqtt_publishing_enabled {
+                    if let Some(ref mqtt) = self.mqtt {
+                        let error_json = format!(
+                            r#"{{"timestamp":{},"source":"cli","event":"unknown_command","error":"{}"}}"#,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            cmd.replace('"', "'")
+                        );
+
+                        if let Some(ref topic) = self.event_error_topic {
+                            let _ = mqtt.publish(topic, error_json.as_bytes(), esp_idf_svc::mqtt::client::QoS::AtMostOnce, false);
+                        }
+                    }
+                }
             }
         }
 

@@ -46,11 +46,16 @@ impl MqttClient {
     pub fn new(
         broker_url: &str,
         client_id: &str,
+        username: Option<&str>,
+        password: Option<&str>,
         message_callback: MessageCallback,
     ) -> Result<Self> {
         info!("Initializing MQTT client...");
         info!("  Broker: {}", broker_url);
         info!("  Client ID: {}", client_id);
+        if username.is_some() {
+            info!("  Using authentication");
+        }
 
         let status = MqttStatus {
             broker_url: broker_url.to_string(),
@@ -60,8 +65,11 @@ impl MqttClient {
 
         let mqtt_config = MqttClientConfiguration {
             client_id: Some(client_id),
+            username: username,
+            password: password,
             keep_alive_interval: Some(std::time::Duration::from_secs(30)),
-            reconnect_timeout: Some(std::time::Duration::from_secs(5)),
+            // Set to 5 minutes to avoid spamming errors when broker is down
+            reconnect_timeout: Some(std::time::Duration::from_secs(300)),
             ..Default::default()
         };
 
@@ -172,14 +180,15 @@ impl MqttClient {
                                 break;
                             }
 
-                            // Exponential backoff: 1s, 2s, 5s, 10s, 30s, then 60s max
+                            // Exponential backoff: 1s, 2s, 5s, 10s, 30s, 60s, then 300s (5 min) max
                             let backoff_secs = match consecutive_errors {
                                 1 => 1,
                                 2 => 2,
                                 3 => 5,
                                 4 => 10,
                                 5 => 30,
-                                _ => 60,
+                                6 => 60,
+                                _ => 300, // 5 minutes to avoid spamming serial port
                             };
 
                             // Don't log INVALID_STATE errors (expected in on-demand mode)

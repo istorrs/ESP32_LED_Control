@@ -1,17 +1,21 @@
 use esp32_led_flasher::cli::{CommandHandler, CommandParser, Terminal};
-use esp32_led_flasher::led::{LedManager, PulseConfig};
+use esp32_led_flasher::led::LedManager;
+#[allow(unused_imports)] // Used when MQTT is enabled
+use esp32_led_flasher::led::PulseConfig;
+#[allow(unused_imports)] // Used when MQTT is enabled
 use esp32_led_flasher::mqtt::MqttClient;
 use esp32_led_flasher::wifi::WifiManager;
 use esp_idf_hal::delay::FreeRtos;
-use esp_idf_hal::gpio::{Output, PinDriver};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::uart::{config::Config as UartConfig, UartDriver};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
+#[allow(unused_imports)] // Used when MQTT is enabled
 use esp_idf_svc::mqtt::client::QoS;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys;
+#[allow(unused_imports)] // Used when MQTT is enabled
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 /// Get ESP32 base MAC address (chip ID) as a hex string
 fn get_chip_id() -> String {
@@ -32,6 +36,23 @@ fn main() -> anyhow::Result<()> {
     // Initialize logging
     esp_idf_svc::log::EspLogger::initialize_default();
 
+    // Suppress noisy MQTT connection error logs from ESP-IDF components
+    // These components spam errors during connection retries when broker is down
+    unsafe {
+        sys::esp_log_level_set(
+            b"esp-tls\0".as_ptr() as *const std::os::raw::c_char,
+            sys::esp_log_level_t_ESP_LOG_WARN,
+        );
+        sys::esp_log_level_set(
+            b"transport_base\0".as_ptr() as *const std::os::raw::c_char,
+            sys::esp_log_level_t_ESP_LOG_WARN,
+        );
+        sys::esp_log_level_set(
+            b"mqtt_client\0".as_ptr() as *const std::os::raw::c_char,
+            sys::esp_log_level_t_ESP_LOG_WARN,
+        );
+    }
+
     log::info!("ESP32 LED Flasher with WiFi and MQTT Control");
     log::info!("Initializing...");
 
@@ -51,9 +72,13 @@ fn main() -> anyhow::Result<()> {
     const WIFI_SSID: &str = "Ian Storrs 1";
     const WIFI_PASSWORD: &str = "abbaabba";
 
-    // MQTT Configuration - Mosquitto public test broker
-    const MQTT_BROKER: &str = "mqtt://test.mosquitto.org:1883";
-    const MQTT_STATUS_TOPIC: &str = "istorrs/led/status";
+    // MQTT Configuration - Flespi broker with token authentication
+    #[allow(dead_code)] // Used when MQTT is enabled
+    const MQTT_BROKER: &str = "mqtt://mqtt.flespi.io:1883";
+    #[allow(dead_code)] // Used when MQTT is enabled
+    const MQTT_USERNAME: &str = "FlespiToken vQHE4KM46e7Npgu8EgFGzikViRjvLUdSXYIoFX9W0ECFhBouPuxRHxfOHXzUN2lb";
+    #[allow(dead_code)] // Used when MQTT is enabled
+    const MQTT_PASSWORD: &str = "";
     const MQTT_CONTROL_TOPIC_SHARED: &str = "istorrs/led/control"; // Shared topic for broadcast commands
 
     // Device-specific MQTT topics based on chip ID
@@ -61,17 +86,24 @@ fn main() -> anyhow::Result<()> {
     let mqtt_control_topic_device = format!("istorrs/led/{}/control", chip_id);
     let mqtt_status_topic_device = format!("istorrs/led/{}/status", chip_id);
 
-    log::info!("📡 MQTT Client ID: {}", mqtt_client_id);
-    log::info!("📡 MQTT Topics:");
+    log::info!("📡 MQTT Configuration (disabled by default):");
+    log::info!("   Client ID: {}", mqtt_client_id);
     log::info!("   Control (shared): {}", MQTT_CONTROL_TOPIC_SHARED);
     log::info!("   Control (device): {}", mqtt_control_topic_device);
     log::info!("   Status (device):  {}", mqtt_status_topic_device);
+    log::info!("   Use 'mqtt_enable' command to connect");
 
-    // Initialize LED on GPIO2 (built-in LED) with default pulse
-    log::info!("💡 Initializing LED on GPIO2 with default pulse (500ms / 5s)...");
-    let led_pin = PinDriver::output(peripherals.pins.gpio2)?;
-    let led_manager = Arc::new(LedManager::new(led_pin));
-    log::info!("✅ LED initialized and pulsing");
+    // Initialize LED on GPIO2 (built-in LED) with LEDC for PWM control and hardware timer for microsecond precision
+    log::info!("💡 Initializing LED on GPIO2 with LEDC + hardware timer (500ms / 5s @ 75%)...");
+    let led_manager = Arc::new(
+        LedManager::new(
+            peripherals.ledc.channel0,
+            peripherals.ledc.timer0,
+            peripherals.pins.gpio2,
+            peripherals.timer00, // Hardware timer for microsecond precision
+        )?
+    );
+    log::info!("✅ LED initialized with hardware timer (1μs resolution)");
 
     // Initialize WiFi and connect immediately (always-on mode)
     let wifi = if WIFI_SSID != "YOUR_SSID" {
@@ -103,21 +135,110 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
+    // MQTT is disabled by default - use mqtt_enable command to enable publishing
+    // To enable MQTT at startup, uncomment the following code
+    let mqtt: Option<Arc<MqttClient>> = None;
+
+    /*
     // Initialize MQTT and connect immediately (always-on mode)
     let mqtt = if wifi.is_some() {
         log::info!("📡 Connecting to MQTT broker: {}", MQTT_BROKER);
 
-        match MqttClient::new(MQTT_BROKER, &mqtt_client_id) {
-            Ok(mut mqtt_client) => {
+        // Create a channel for STATUS_REQ messages
+        let (status_req_tx, status_req_rx) = mpsc::channel::<()>();
+
+        // Set up MQTT message handler for provisioning and control
+        let led_for_mqtt = led_manager.clone();
+        let message_callback = Arc::new(move |topic: &str, payload: &[u8]| {
+            if let Ok(payload_str) = std::str::from_utf8(payload) {
+                log::info!("📨 MQTT message on '{}': {}", topic, payload_str);
+
+                // Handle STATUS_REQ - send signal to status responder thread
+                if payload_str == "STATUS_REQ" {
+                    log::info!("📊 Status request received");
+                    let _ = status_req_tx.send(()); // Non-blocking send
+                    return;
+                }
+
+                // Provisioning: Parse JSON payload for LED config changes
+                // Expected format: {"duration_ms": 500, "period_ms": 5000, "brightness_percent": 75}
+                // Or simple commands: "on", "off"
+                match payload_str {
+                    "on" => {
+                        log::info!("💡 MQTT provisioning: Turn LED ON");
+                        led_for_mqtt.turn_on();
+                    }
+                    "off" => {
+                        log::info!("💡 MQTT provisioning: Turn LED OFF");
+                        led_for_mqtt.turn_off();
+                    }
+                    _ => {
+                        // Try to parse as JSON for pulse configuration
+                        // Support both microseconds (duration_us/period_us) and milliseconds (duration_ms/period_ms) for backward compatibility
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload_str) {
+                            // Try microseconds first
+                            let (duration_us, period_us) = if let (Some(duration), Some(period)) = (
+                                json.get("duration_us").and_then(|v| v.as_u64()),
+                                json.get("period_us").and_then(|v| v.as_u64()),
+                            ) {
+                                (duration as u32, period as u32)
+                            } else if let (Some(duration), Some(period)) = (
+                                json.get("duration_ms").and_then(|v| v.as_u64()),
+                                json.get("period_ms").and_then(|v| v.as_u64()),
+                            ) {
+                                // Convert milliseconds to microseconds
+                                (duration as u32 * 1000, period as u32 * 1000)
+                            } else {
+                                log::warn!("⚠️  Invalid JSON format - expected duration_us/period_us or duration_ms/period_ms");
+                                return;
+                            };
+
+                            // Brightness is optional, defaults to 75%
+                            let brightness_percent = json.get("brightness_percent")
+                                .and_then(|v| v.as_u64())
+                                .map(|v| v as u8)
+                                .unwrap_or(75);
+
+                            log::info!(
+                                "💡 MQTT provisioning: Set pulse {}μs / {}μs @ {}%",
+                                duration_us,
+                                period_us,
+                                brightness_percent
+                            );
+
+                            match PulseConfig::new(duration_us, period_us, brightness_percent) {
+                                Ok(config) => {
+                                    led_for_mqtt.set_pulse(config);
+                                }
+                                Err(e) => {
+                                    log::warn!("⚠️  Invalid pulse config: {}", e);
+                                }
+                            }
+                        } else {
+                            log::warn!("⚠️  Unknown MQTT command: {}", payload_str);
+                        }
+                    }
+                }
+            }
+        });
+
+        match MqttClient::new(
+            MQTT_BROKER,
+            &mqtt_client_id,
+            Some(MQTT_USERNAME),
+            Some(MQTT_PASSWORD),
+            message_callback,
+        ) {
+            Ok(mqtt_client) => {
                 log::info!("✅ MQTT connected successfully");
 
                 // Subscribe to LED control topics
                 log::info!("📬 Subscribing to control topics...");
-                if let Err(e) = mqtt_client.subscribe(&mqtt_control_topic_shared, QoS::AtMostOnce)
+                if let Err(e) = mqtt_client.subscribe(MQTT_CONTROL_TOPIC_SHARED, QoS::AtMostOnce)
                 {
                     log::warn!("⚠️  Failed to subscribe to shared control topic: {:?}", e);
                 } else {
-                    log::info!("  ✅ Subscribed to: {}", mqtt_control_topic_shared);
+                    log::info!("  ✅ Subscribed to: {}", MQTT_CONTROL_TOPIC_SHARED);
                 }
 
                 if let Err(e) =
@@ -128,74 +249,105 @@ fn main() -> anyhow::Result<()> {
                     log::info!("  ✅ Subscribed to: {}", mqtt_control_topic_device);
                 }
 
-                // Set up MQTT message handler for LED control
-                let led_for_mqtt = led_manager.clone();
-                mqtt_client.set_message_callback(move |topic, payload| {
-                    log::info!("📨 MQTT message received on {}: {}", topic, payload);
+                log::info!("💡 MQTT ready for provisioning - send STATUS_REQ to get device status");
 
-                    // Parse JSON payload for LED control
-                    // Expected format: {"duration_ms": 500, "period_ms": 5000}
-                    // Or simple commands: "on", "off", "blink"
-                    match payload.as_str() {
-                        "on" => {
-                            log::info!("💡 MQTT command: Turn LED ON");
-                            led_for_mqtt.turn_on();
-                        }
-                        "off" => {
-                            log::info!("💡 MQTT command: Turn LED OFF");
-                            led_for_mqtt.turn_off();
-                        }
-                        _ => {
-                            // Try to parse as JSON
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
-                                if let (Some(duration), Some(period)) = (
-                                    json.get("duration_ms").and_then(|v| v.as_u64()),
-                                    json.get("period_ms").and_then(|v| v.as_u64()),
-                                ) {
-                                    let duration_ms = duration as u32;
-                                    let period_ms = period as u32;
+                let mqtt_client_arc = Arc::new(mqtt_client);
 
-                                    log::info!(
-                                        "💡 MQTT command: Set pulse {}ms / {}ms",
-                                        duration_ms,
-                                        period_ms
-                                    );
+                // Spawn status responder thread to handle STATUS_REQ messages
+                let mqtt_for_status = mqtt_client_arc.clone();
+                let led_for_status = led_manager.clone();
+                let status_topic = mqtt_status_topic_device.clone();
+                let chip_id_for_status = chip_id.clone();
+                let wifi_ssid = WIFI_SSID.to_string();
 
-                                    match PulseConfig::new(duration_ms, period_ms) {
-                                        Ok(config) => {
-                                            led_for_mqtt.set_pulse(config);
-                                        }
-                                        Err(e) => {
-                                            log::warn!("⚠️  Invalid pulse config: {}", e);
-                                        }
-                                    }
-                                } else {
-                                    log::warn!("⚠️  Invalid JSON format - expected duration_ms and period_ms");
+                std::thread::Builder::new()
+                    .stack_size(8192)
+                    .name("mqtt_status_resp".to_string())
+                    .spawn(move || {
+                        log::info!("📊 MQTT status responder thread started");
+
+                        // Wait for STATUS_REQ messages from the channel
+                        while let Ok(()) = status_req_rx.recv() {
+                            log::info!("📊 Processing STATUS_REQ, gathering device info...");
+
+                            // Gather device status
+                            let led_status = led_for_status.get_status();
+                            let stats = led_for_status.get_statistics();
+
+                            // Build status JSON
+                            let status_json = match led_status {
+                                esp32_led_flasher::led::LedStatus::Off => {
+                                    format!(
+                                        r#"{{"device_id":"{}","state":"off","wifi_ssid":"{}","pulse_count":{},"config_age_secs":{:.1}}}"#,
+                                        chip_id_for_status,
+                                        wifi_ssid,
+                                        stats.pulse_count,
+                                        stats.config_changed_time.elapsed().as_secs_f32()
+                                    )
                                 }
+                                esp32_led_flasher::led::LedStatus::SolidOn => {
+                                    format!(
+                                        r#"{{"device_id":"{}","state":"on","wifi_ssid":"{}","pulse_count":{},"config_age_secs":{:.1}}}"#,
+                                        chip_id_for_status,
+                                        wifi_ssid,
+                                        stats.pulse_count,
+                                        stats.config_changed_time.elapsed().as_secs_f32()
+                                    )
+                                }
+                                esp32_led_flasher::led::LedStatus::CustomPulse(config) => {
+                                    let last_pulse_secs = stats.last_pulse_time
+                                        .map(|t| t.elapsed().as_secs_f32())
+                                        .unwrap_or(-1.0);
+                                    format!(
+                                        r#"{{"device_id":"{}","state":"pulsing","duration_us":{},"period_us":{},"brightness_percent":{},"wifi_ssid":"{}","pulse_count":{},"config_age_secs":{:.1},"last_pulse_secs":{:.1}}}"#,
+                                        chip_id_for_status,
+                                        config.duration_us,
+                                        config.period_us,
+                                        config.brightness_percent,
+                                        wifi_ssid,
+                                        stats.pulse_count,
+                                        stats.config_changed_time.elapsed().as_secs_f32(),
+                                        last_pulse_secs
+                                    )
+                                }
+                                esp32_led_flasher::led::LedStatus::SlowBlink => {
+                                    format!(
+                                        r#"{{"device_id":"{}","state":"blink","frequency_hz":1,"wifi_ssid":"{}","pulse_count":{},"config_age_secs":{:.1}}}"#,
+                                        chip_id_for_status,
+                                        wifi_ssid,
+                                        stats.pulse_count,
+                                        stats.config_changed_time.elapsed().as_secs_f32()
+                                    )
+                                }
+                                esp32_led_flasher::led::LedStatus::FastBlink => {
+                                    format!(
+                                        r#"{{"device_id":"{}","state":"blink","frequency_hz":5,"wifi_ssid":"{}","pulse_count":{},"config_age_secs":{:.1}}}"#,
+                                        chip_id_for_status,
+                                        wifi_ssid,
+                                        stats.pulse_count,
+                                        stats.config_changed_time.elapsed().as_secs_f32()
+                                    )
+                                }
+                            };
+
+                            // Publish status response
+                            if let Err(e) = mqtt_for_status.publish(
+                                &status_topic,
+                                status_json.as_bytes(),
+                                QoS::AtMostOnce,
+                                false,
+                            ) {
+                                log::warn!("⚠️  Failed to publish status response: {:?}", e);
                             } else {
-                                log::warn!("⚠️  Unknown MQTT command: {}", payload);
+                                log::info!("📤 Published status response");
                             }
                         }
-                    }
-                });
 
-                // Publish initial status
-                let status = format!(
-                    r#"{{"state":"pulsing","duration_ms":500,"period_ms":5000,"device_id":"{}"}}"#,
-                    chip_id
-                );
-                if let Err(e) = mqtt_client.publish(
-                    &mqtt_status_topic_device,
-                    status.as_bytes(),
-                    QoS::AtLeastOnce,
-                    false,
-                ) {
-                    log::warn!("⚠️  Failed to publish initial status: {:?}", e);
-                } else {
-                    log::info!("📤 Published initial LED status");
-                }
+                        log::info!("📊 MQTT status responder thread exiting");
+                    })
+                    .expect("Failed to spawn MQTT status responder");
 
-                Some(Arc::new(mqtt_client))
+                Some(mqtt_client_arc)
             }
             Err(e) => {
                 log::error!("❌ MQTT connection failed: {:?}", e);
@@ -207,11 +359,12 @@ fn main() -> anyhow::Result<()> {
         log::info!("⏭️  MQTT not initialized (WiFi not available)");
         None
     };
+    */
 
     // Initialize UART0 for CLI (USB-C on most ESP32 boards)
     log::info!("📟 Initializing UART0 for CLI...");
     let uart_config = UartConfig::default().baudrate(esp_idf_hal::units::Hertz(115200));
-    let uart = UartDriver::new(
+    let mut uart = UartDriver::new(
         peripherals.uart0,
         peripherals.pins.gpio1,  // TX
         peripherals.pins.gpio3,  // RX
@@ -222,15 +375,28 @@ fn main() -> anyhow::Result<()> {
 
     log::info!("✅ UART0 initialized at 115200 baud");
 
+    // Split UART into TX and RX drivers
+    let (uart_tx, uart_rx) = uart.split();
+
     // Create terminal and command handler
-    let mut terminal = Terminal::new(uart);
+    let mut terminal = Terminal::new(uart_tx, uart_rx);
     let mut command_handler = CommandHandler::new().with_led(led_manager.clone());
 
     if let Some(wifi_ref) = &wifi {
         command_handler = command_handler.with_wifi(wifi_ref.clone());
     }
     if let Some(mqtt_ref) = &mqtt {
-        command_handler = command_handler.with_mqtt(mqtt_ref.clone());
+        // Set up event topics for MQTT notifications
+        let event_config_topic = format!("istorrs/led/{}/event/config", chip_id);
+        let event_error_topic = format!("istorrs/led/{}/event/error", chip_id);
+
+        log::info!("📡 MQTT Event Topics:");
+        log::info!("   Config events: {}", event_config_topic);
+        log::info!("   Error events:  {}", event_error_topic);
+
+        command_handler = command_handler
+            .with_mqtt(mqtt_ref.clone())
+            .with_event_topics(event_config_topic, event_error_topic);
     }
 
     // Display welcome banner
@@ -254,7 +420,7 @@ fn main() -> anyhow::Result<()> {
         terminal.write_line(&format!("    {}", mqtt_control_topic_device))?;
         terminal.write_line(&format!("    {}", MQTT_CONTROL_TOPIC_SHARED))?;
     } else {
-        terminal.write_line("  MQTT: ❌ Not connected")?;
+        terminal.write_line("  MQTT: ❌ Disabled (use mqtt_enable to connect)")?;
     }
 
     terminal.write_line("")?;
@@ -264,79 +430,26 @@ fn main() -> anyhow::Result<()> {
     // Main CLI loop
     log::info!("🚀 Entering main CLI loop");
 
-    // Spawn background task for periodic MQTT status publishing
-    if let (Some(mqtt_ref), Some(_wifi_ref)) = (mqtt.clone(), wifi.clone()) {
-        let led_for_status = led_manager.clone();
-        let status_topic = mqtt_status_topic_device.clone();
-        let chip_id_for_status = chip_id.clone();
-
-        std::thread::Builder::new()
-            .stack_size(8192)
-            .name("mqtt_status".to_string())
-            .spawn(move || {
-                log::info!("📊 MQTT status publisher started (every 60s)");
-                loop {
-                    FreeRtos::delay_ms(60_000); // Publish every 60 seconds
-
-                    let status = led_for_status.get_status();
-                    let status_json = match status {
-                        esp32_led_flasher::led::LedStatus::Off => {
-                            format!(
-                                r#"{{"state":"off","device_id":"{}"}}"#,
-                                chip_id_for_status
-                            )
-                        }
-                        esp32_led_flasher::led::LedStatus::SolidOn => {
-                            format!(
-                                r#"{{"state":"on","device_id":"{}"}}"#,
-                                chip_id_for_status
-                            )
-                        }
-                        esp32_led_flasher::led::LedStatus::CustomPulse(config) => {
-                            format!(
-                                r#"{{"state":"pulsing","duration_ms":{},"period_ms":{},"device_id":"{}"}}"#,
-                                config.duration_ms, config.period_ms, chip_id_for_status
-                            )
-                        }
-                        esp32_led_flasher::led::LedStatus::SlowBlink => {
-                            format!(
-                                r#"{{"state":"blink","frequency_hz":1,"device_id":"{}"}}"#,
-                                chip_id_for_status
-                            )
-                        }
-                        esp32_led_flasher::led::LedStatus::FastBlink => {
-                            format!(
-                                r#"{{"state":"blink","frequency_hz":5,"device_id":"{}"}}"#,
-                                chip_id_for_status
-                            )
-                        }
-                    };
-
-                    if let Err(e) = mqtt_ref.publish(
-                        &status_topic,
-                        status_json.as_bytes(),
-                        QoS::AtMostOnce,
-                        false,
-                    ) {
-                        log::warn!("⚠️  Failed to publish status: {:?}", e);
-                    } else {
-                        log::debug!("📤 Published LED status");
-                    }
-                }
-            })
-            .expect("Failed to spawn MQTT status publisher");
-    }
+    // MQTT is now only used for provisioning (receiving config changes)
+    // Status is reported only on STATUS_REQ messages
 
     loop {
-        if let Ok(command) = terminal.read_command(&mut command_handler) {
-            match command_handler.execute_command(command) {
-                Ok(response) => {
-                    if !response.is_empty() {
-                        let _ = terminal.write_line(&response);
+        // Read and handle characters from UART
+        if let Ok(Some(ch)) = terminal.read_char() {
+            if let Ok(Some(command_str)) = terminal.handle_char(ch) {
+                // Parse and execute the command
+                let command = CommandParser::parse_command(&command_str);
+                match command_handler.execute_command(command) {
+                    Ok(response) => {
+                        if !response.is_empty() {
+                            let _ = terminal.write_line(&response);
+                        }
+                        let _ = terminal.print_prompt();
                     }
-                }
-                Err(e) => {
-                    let _ = terminal.write_line(&format!("Error: {}", e));
+                    Err(e) => {
+                        let _ = terminal.write_line(&format!("Error: {}", e));
+                        let _ = terminal.print_prompt();
+                    }
                 }
             }
         }

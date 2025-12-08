@@ -242,7 +242,7 @@ impl<'d> Terminal<'d> {
         self.write_line("  echo <text> - Echo text back")?;
         self.write_line("  led_on      - Turn LED on (solid)")?;
         self.write_line("  led_off     - Turn LED off")?;
-        self.write_line("  led_pulse <dur_ms> <period_ms> - Set custom pulse (1-2000ms, 3000-3600000ms)")?;
+        self.write_line("  led_pulse <dur_ms> <period_ms> [brightness_%] - Set custom pulse (50-2000ms, 500ms-1h, 0-100%)")?;
         self.write_line("  led_status  - Show LED status and configuration")?;
         self.write_line("  led_blink <hz> - Set blink frequency (1-10 Hz)")?;
         self.write_line("  wifi_connect [ssid] [password] - Connect to WiFi (no args = default)")?;
