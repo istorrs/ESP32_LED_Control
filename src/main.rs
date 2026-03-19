@@ -1,4 +1,5 @@
 use esp32_led_flasher::cli::{CommandHandler, CommandParser, Terminal};
+use esp32_led_flasher::tcp_cli;
 use esp32_led_flasher::led::LedManager;
 #[allow(unused_imports)] // Used when MQTT is enabled
 use esp32_led_flasher::led::PulseConfig;
@@ -121,7 +122,16 @@ fn main() -> anyhow::Result<()> {
                 log::info!("✅ WiFi connected successfully");
                 if let Ok(ip) = wifi.get_ip() {
                     log::info!("📡 IP Address: {}", ip);
+                    log::info!("🌐 TCP CLI will be available at {}:{}", ip, tcp_cli::TCP_CLI_PORT);
                 }
+
+                // Start TCP CLI server — same CLI as serial, accessible over WiFi
+                log::info!("📟 Starting TCP CLI server on port {}...", tcp_cli::TCP_CLI_PORT);
+                match tcp_cli::start(led_manager.clone()) {
+                    Ok(()) => log::info!("✅ TCP CLI server started"),
+                    Err(e) => log::warn!("⚠️  TCP CLI server failed to start: {:?}", e),
+                }
+
                 Some(Arc::new(Mutex::new(wifi)))
             }
             Err(e) => {
@@ -410,8 +420,10 @@ fn main() -> anyhow::Result<()> {
 
     if wifi.is_some() {
         terminal.write_line("  WiFi: ✅ Connected")?;
+        terminal.write_line(&format!("  TCP CLI: port {} (nc <ip> {})", tcp_cli::TCP_CLI_PORT, tcp_cli::TCP_CLI_PORT))?;
     } else {
         terminal.write_line("  WiFi: ❌ Not connected")?;
+        terminal.write_line("  TCP CLI: ❌ Unavailable (no WiFi)")?;
     }
 
     if mqtt.is_some() {

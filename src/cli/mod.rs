@@ -37,9 +37,10 @@ pub enum CliCommand {
     MqttEnable,
     MqttDisable,
     // Other
+    Disconnect,         // Close the TCP connection (no-op on UART)
     Empty,
-    InvalidSyntax(String), // Invalid parameters/syntax for a known command
-    Unknown(String),        // Completely unknown command
+    InvalidSyntax(String),
+    Unknown(String),
 }
 
 #[derive(Debug)]

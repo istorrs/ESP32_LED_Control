@@ -54,6 +54,7 @@ impl CommandParser {
             "clear",
             "reset",
             "echo",
+            "disconnect",
             "led_on",
             "led_off",
             "led_pulse",
@@ -95,6 +96,7 @@ impl CommandParser {
             "uptime" => CliCommand::Uptime,
             "clear" => CliCommand::Clear,
             "reset" => CliCommand::Reset,
+            "disconnect" | "exit" | "quit" => CliCommand::Disconnect,
             "led_on" => CliCommand::LedOn,
             "led_off" => CliCommand::LedOff,
             "led_pulse" => {

@@ -73,6 +73,11 @@ impl CommandHandler {
             CliCommand::Empty => {
                 // Empty command - just return empty response (no error)
             }
+            CliCommand::Disconnect => {
+                // Actual disconnection is handled by the TCP CLI loop.
+                // On UART there's no connection to close.
+                response.push_str("(disconnect only applies to TCP connections)");
+            }
             CliCommand::Help => {
                 log::info!("CLI: Help requested");
                 response.push_str("Available commands:\r\n");

@@ -6,6 +6,7 @@ pub mod cli;
 pub mod led;
 pub mod mqtt;
 pub mod network_config;
+pub mod tcp_cli;
 pub mod wifi;
 
 pub use cli::{CliCommand, CliError, CommandHandler, CommandParser, Terminal};
